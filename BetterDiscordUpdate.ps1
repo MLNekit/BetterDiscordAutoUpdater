@@ -3,18 +3,18 @@
 # 1. Checks if Discord is running.
 #    - If running, it will kill the Discord process.
 #    - If not running, it installs Discord silently.
-#    - After installation, the script waits a few seconds and then closes Discord.
+#    - After installation, the script waits (60 seconds) for the installer to complete before closing Discord.
 # 2. Checks for required dependencies (git, Node.js, and pnpm) and installs them if missing.
 #    - Node.js is installed from the provided MSI URL if not found.
 #    - pnpm is installed using "npm install -g pnpm" after Node.js is available.
 # 3. Ensures the update script folder exists and updates the local script if an update is available.
 # 4. Clones or updates the BetterDiscord repository.
-# 5. Creates a Start Menu shortcut for this update script if one does not exist.
+# 5. Creates a Start Menu shortcut for this update script in the current user's Start Menu.
 # 6. Ensures the BetterDiscord folder exists.
 # 7. Runs build and injection commands in the repository folder.
 # 8. Launches Discord (without showing the console).
 
-# ------------------------------
+# ---------------------------------------
 # Function: Refresh PATH from Machine and User environment variables
 function Refresh-Path {
     $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
@@ -22,7 +22,34 @@ function Refresh-Path {
     $env:PATH = "$machinePath;$userPath"
 }
 
-# ------------------------------
+# ---------------------------------------
+# Helper functions to get Node.js and npm commands if not on PATH
+
+function Get-NodeCmd {
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        return "node"
+    }
+    elseif (Test-Path "C:\Program Files\nodejs\node.exe") {
+        return "C:\Program Files\nodejs\node.exe"
+    }
+    else {
+        return $null
+    }
+}
+
+function Get-NpmCmd {
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        return "npm"
+    }
+    elseif (Test-Path "C:\Program Files\nodejs\npm.cmd") {
+        return "C:\Program Files\nodejs\npm.cmd"
+    }
+    else {
+        return $null
+    }
+}
+
+# ---------------------------------------
 # Step 1: Check if Discord is running or install Discord
 
 $discordProcess = Get-Process -Name discord -ErrorAction SilentlyContinue
@@ -46,10 +73,10 @@ if ($discordProcess) {
     Write-Output "Waiting for Discord installer to complete..."
     $installerProc.WaitForExit()
 
-    # Wait an additional 10 seconds to allow Discord to launch automatically.
-    Start-Sleep -Seconds 10
+    # Wait an additional 60 seconds to allow installation to complete.
+    Start-Sleep -Seconds 60
 
-    # Now check if Discord launched and if so, close it.
+    # Now check if Discord launched automatically and, if so, close it.
     $discordAfterInstall = Get-Process -Name discord -ErrorAction SilentlyContinue
     if ($discordAfterInstall) {
         Write-Output "Discord launched automatically after installation. Closing Discord..."
@@ -57,7 +84,7 @@ if ($discordProcess) {
     }
 }
 
-# ------------------------------
+# ---------------------------------------
 # Step 2: Check for dependencies (git, Node.js, and pnpm)
 
 # Function to check for a command and install using winget if not found.
@@ -70,7 +97,6 @@ function Ensure-Dependency {
     if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
         Write-Output "$CommandName not found. Installing $CommandName via winget..."
         winget install --id $WingetId -e $InstallArgs
-        # Allow a moment for the installation to update the system
         Start-Sleep -Seconds 5
         Refresh-Path
     }
@@ -83,7 +109,7 @@ function Ensure-Dependency {
 Ensure-Dependency -CommandName "git" -WingetId "Git.Git"
 
 # Check for Node.js. If not found, download and install from the provided MSI.
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+if (-not (Get-NodeCmd)) {
     Write-Output "Node.js not found. Installing Node.js..."
     $nodeMsiUrl = "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi"
     $nodeMsiPath = "$env:TEMP\node-v22.13.1-x64.msi"
@@ -106,15 +132,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 # Check for pnpm. If not found, install it via npm.
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
     Write-Output "pnpm not found. Installing pnpm globally via npm..."
-    # Determine the npm command. If 'npm' is not found, try the typical full path.
-    $npmCmd = ""
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        $npmCmd = "npm"
-    }
-    elseif (Test-Path "C:\Program Files\nodejs\npm.cmd") {
-        $npmCmd = "C:\Program Files\nodejs\npm.cmd"
-    }
-    else {
+    $npmCmd = Get-NpmCmd
+    if (-not $npmCmd) {
         Write-Error "npm command not found. Ensure Node.js is installed correctly."
         exit 1
     }
@@ -124,7 +143,7 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
     Write-Output "pnpm is already installed."
 }
 
-# ------------------------------
+# ---------------------------------------
 # Step 3: Ensure the update script folder exists and update the script file if needed
 
 $updateScriptDir = "$env:USERPROFILE\AppData\Roaming\BetterDiscord Update Script"
@@ -163,7 +182,7 @@ if (Test-Path $localScriptPath) {
     $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
 }
 
-# ------------------------------
+# ---------------------------------------
 # Step 4: Clone or update the BetterDiscord repository
 
 $bdRepoDir = Join-Path $updateScriptDir "BetterDiscord"
@@ -182,8 +201,8 @@ if (-not (Test-Path $bdRepoDir)) {
     Pop-Location
 }
 
-# ------------------------------
-# Step 5: Create Start Menu shortcut if it does not exist
+# ---------------------------------------
+# Step 5: Create Start Menu shortcut if it does not exist.
 # Use the current user's Start Menu folder to avoid permission issues.
 $startMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $shortcutPath = Join-Path $startMenuDir "BetterDiscord Update.lnk"
@@ -205,7 +224,7 @@ if (-not (Test-Path $shortcutPath)) {
     Write-Output "Start Menu shortcut already exists."
 }
 
-# ------------------------------
+# ---------------------------------------
 # Step 6: Ensure the BetterDiscord folder exists
 
 $bdFolder = "$env:USERPROFILE\AppData\Roaming\BetterDiscord"
@@ -216,7 +235,7 @@ if (-not (Test-Path $bdFolder)) {
     Write-Output "BetterDiscord folder already exists."
 }
 
-# ------------------------------
+# ---------------------------------------
 # Step 7: Build and inject BetterDiscord
 
 if (-not (Test-Path $bdRepoDir)) {
@@ -226,15 +245,8 @@ if (-not (Test-Path $bdRepoDir)) {
     Push-Location $bdRepoDir
 
     # Ensure pnpm is installed (should already be installed via npm).
-    # Determine the npm command as before.
-    $npmCmd = ""
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        $npmCmd = "npm"
-    }
-    elseif (Test-Path "C:\Program Files\nodejs\npm.cmd") {
-        $npmCmd = "C:\Program Files\nodejs\npm.cmd"
-    }
-    else {
+    $npmCmd = Get-NpmCmd
+    if (-not $npmCmd) {
         Write-Error "npm command not found. Ensure Node.js is installed correctly."
         Pop-Location
         exit 1
@@ -242,6 +254,7 @@ if (-not (Test-Path $bdRepoDir)) {
     & $npmCmd install -g pnpm
 
     # Install repository dependencies and run build/inject commands.
+    # Using & ensures that the commands are executed properly.
     & pnpm install
     & pnpm build
     & pnpm inject
@@ -249,11 +262,11 @@ if (-not (Test-Path $bdRepoDir)) {
     Pop-Location
 }
 
-# ------------------------------
+# ---------------------------------------
 # Step 8: Launch Discord (without showing the console)
 
 Write-Output "Launching Discord..."
-# Attempt to launch Discord using its updater if available.
+# First try launching via Update.exe if available.
 $discordUpdater = "$env:LOCALAPPDATA\Discord\Update.exe"
 if (Test-Path $discordUpdater) {
     try {

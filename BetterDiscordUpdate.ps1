@@ -1,275 +1,260 @@
-# BetterDiscordUpdate.ps1
-# This script updates BetterDiscord by checking for dependencies, updating the repository,
-# and then installing/injecting BetterDiscord. It also creates an update shortcut.
+<#
+    BetterDiscord Auto-Updater Script
+    Updated: 2025-02-02
 
-# --- Function: Relaunch as Administrator if not already ---
-function Ensure-RunAsAdmin {
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host "Restarting script with administrative privileges..."
-        Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-        Exit
-    }
+    This script performs the following steps:
+    0. If Discord is not installed, installs it silently and prompts the user to press ENTER when ready.
+    1. Checks if Discord is running; if so, terminates the process.
+    2. Checks and installs dependencies (Git, Node.js, pnpm).
+    3. Ensures the update script folder exists and updates the script file if needed.
+    4. Clones or updates the BetterDiscord repository.
+    5. Creates a Start Menu shortcut for this updater.
+    6. Ensures the BetterDiscord folder exists.
+    7. In the repository folder, runs: npm install -g pnpm, pnpm install, pnpm build, pnpm inject.
+    8. Launches Discord.
+#>
+
+# ========= 0. ELEVATION CHECK =========
+# Function to check if the current session is running with administrator rights
+function Test-Administrator {
+    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $currentUser.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 }
-Ensure-RunAsAdmin
 
-# --- Step 1: Check if Discord is running; if not, install silently and then prompt user ---
-Write-Host "`n[Step 1] Checking Discord process status..."
+if (-not (Test-Administrator)) {
+    Write-Host "Script is not running as administrator. Relaunching with elevated privileges..."
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    Exit
+}
+
+# ========= 0. CHECK IF DISCORD IS INSTALLED =========
+# We assume Discord is installed if the Discord folder exists in LocalAppData
+$discordInstallPath = Join-Path $env:LOCALAPPDATA "Discord"
+if (-not (Test-Path $discordInstallPath)) {
+    Write-Host "Discord is not installed. Downloading and installing Discord silently..."
+
+    # Download Discord installer
+    $discordInstaller = "$env:TEMP\DiscordSetup.exe"
+    # The official Discord download link for Windows:
+    Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile $discordInstaller
+
+    # Run the installer silently (Discord supports a silent install switch)
+    Start-Process -FilePath $discordInstaller -ArgumentList "--silent" -Wait
+
+    Write-Host "Discord installation initiated. Discord may launch automatically."
+    Write-Host "If the Discord installation is complete and you wish to continue, press ENTER."
+    Read-Host -Prompt "Press ENTER to continue"
+}
+else {
+    Write-Host "Discord is installed."
+}
+
+# ========= 1. TERMINATE DISCORD IF RUNNING =========
 $discordProcess = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
 if ($discordProcess) {
-    Write-Host "Discord is currently running. Closing Discord..."
+    Write-Host "Discord is running. Terminating Discord..."
     Stop-Process -Name "Discord" -Force
     Start-Sleep -Seconds 2
 } else {
-    Write-Host "Discord is not running. Installing Discord silently..."
-    # Download the Discord installer (adjust URL and silent parameters as needed)
-    $discordInstaller = "$env:TEMP\DiscordSetup.exe"
-    try {
-        Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile $discordInstaller
-    }
-    catch {
-        Write-Error "Failed to download Discord installer. Check your internet connection."
-        Pause
-        Exit
-    }
-    Write-Host "Launching Discord installer in silent mode..."
-    Start-Process -FilePath $discordInstaller -ArgumentList "/S" -Wait
-
-    # Discord may auto-launch after install; prompt user to close it
-    Write-Host "If Discord installation has finished and Discord has launched, press ENTER to continue. This will terminate Discord and resume the update."
-    Read-Host "Press ENTER to continue"
-    
-    # After the prompt, ensure Discord is not running
-    $discordProcess = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
-    if ($discordProcess) {
-        Write-Host "Closing Discord..."
-        Stop-Process -Name "Discord" -Force
-        Start-Sleep -Seconds 2
-    }
+    Write-Host "Discord is not running."
 }
 
-# --- Step 2: Check for required dependencies: Git, Node.js, and pnpm ---
-Write-Host "`n[Step 2] Checking dependencies..."
+# ========= 2. CHECK AND INSTALL DEPENDENCIES =========
 
-# Check for Git
+# --- Check for Git ---
 Write-Host "Checking for Git..."
 $gitInstalled = Get-Command git -ErrorAction SilentlyContinue
 if (-not $gitInstalled) {
     Write-Host "Git is not installed. Installing Git..."
     $gitInstaller = "$env:TEMP\git-installer.exe"
-    try {
-        Invoke-WebRequest "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe" -OutFile $gitInstaller
-    }
-    catch {
-        Write-Error "Failed to download Git installer."
-        Pause
-        Exit
-    }
+    Invoke-WebRequest "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe" -OutFile $gitInstaller
     Start-Process -FilePath $gitInstaller -ArgumentList "/VERYSILENT" -Wait
     Write-Host "Git has been installed."
 } else {
     Write-Host "Git is installed."
 }
 
-# Check for Node.js
+# --- Check for Node.js ---
 Write-Host "Checking for Node.js..."
 $nodeInstalled = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeInstalled) {
     Write-Host "Node.js is not installed. Installing Node.js..."
     $nodeInstaller = "$env:TEMP\node-installer.msi"
-    try {
-        Invoke-WebRequest "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi" -OutFile $nodeInstaller
-    }
-    catch {
-        Write-Error "Failed to download Node.js installer."
-        Pause
-        Exit
-    }
+    Invoke-WebRequest "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi" -OutFile $nodeInstaller
     Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`"$nodeInstaller`"", "/quiet", "/norestart" -Wait
     Write-Host "Node.js has been installed."
 } else {
     Write-Host "Node.js is installed."
 }
 
-# Check for pnpm
+# --- Check for pnpm ---
 Write-Host "Checking for pnpm..."
 $pnpmInstalled = Get-Command pnpm -ErrorAction SilentlyContinue
 if (-not $pnpmInstalled) {
     Write-Host "pnpm is not installed. Installing pnpm..."
-    try {
-        Invoke-WebRequest "https://get.pnpm.io/install.ps1" -UseBasicParsing | Invoke-Expression
-    }
-    catch {
-        Write-Error "Failed to install pnpm."
-        Pause
-        Exit
-    }
+    Invoke-WebRequest "https://get.pnpm.io/install.ps1" -UseBasicParsing | Invoke-Expression
     Write-Host "pnpm has been installed."
 } else {
     Write-Host "pnpm is installed."
 }
 
-# Confirm that all dependencies are now available
-if (-not (Get-Command git -ErrorAction SilentlyContinue) -or
-    -not (Get-Command node -ErrorAction SilentlyContinue) -or
+# Verify all dependencies are now available
+if (-not (Get-Command git -ErrorAction SilentlyContinue) -or `
+    -not (Get-Command node -ErrorAction SilentlyContinue) -or `
     -not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-    Write-Host "One or more dependencies are missing. Please restart the script."
+    Write-Host "One or more dependencies failed to install. Please restart the script."
     Pause
     Exit
 }
+
 Write-Host "All dependencies are installed."
 
-# --- Step 3: Check and update the local update script folder ---
-Write-Host "`n[Step 3] Checking update script folder..."
-$updateScriptFolder = Join-Path $env:APPDATA "BetterDiscord Update Script"
+# ========= 3. ENSURE UPDATE SCRIPT FOLDER EXISTS AND UPDATE SCRIPT =========
+$updateScriptFolder = Join-Path $env:APPDATA "Roaming\BetterDiscord Update Script"
 if (-not (Test-Path $updateScriptFolder)) {
-    Write-Host "Creating update script folder at $updateScriptFolder..."
-    New-Item -Path $updateScriptFolder -ItemType Directory -Force | Out-Null
+    Write-Host "Creating BetterDiscord Update Script folder..."
+    New-Item -ItemType Directory -Path $updateScriptFolder -Force | Out-Null
 } else {
     Write-Host "Update script folder exists."
 }
 
+# Define the local script file path and the remote URL for the auto-updater script.
 $localScriptPath = Join-Path $updateScriptFolder "BetterDiscordUpdate.ps1"
-$remoteScriptUrl = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
-$downloadNewScript = $true
-if (Test-Path $localScriptPath) {
-    Write-Host "Comparing local update script with the remote version..."
-    try {
-        $localContent = Get-Content $localScriptPath -Raw
-        $remoteContent = (Invoke-WebRequest -Uri $remoteScriptUrl -UseBasicParsing).Content
-        if ($localContent -eq $remoteContent) {
-            Write-Host "Local update script is up-to-date."
-            $downloadNewScript = $false
-        }
-        else {
-            Write-Host "Local update script is outdated. Updating..."
-        }
-    }
-    catch {
-        Write-Host "Error comparing scripts. Updating local copy..."
-    }
+$remoteScriptURL = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
+
+# Download remote script content
+try {
+    $remoteScriptContent = Invoke-WebRequest $remoteScriptURL -UseBasicParsing -ErrorAction Stop
+    $remoteContent = $remoteScriptContent.Content
+} catch {
+    Write-Host "Failed to download remote update script. Please check your internet connection."
+    Pause
+    Exit
 }
-if ($downloadNewScript) {
-    try {
-        Invoke-WebRequest -Uri $remoteScriptUrl -OutFile $localScriptPath -UseBasicParsing
-        Write-Host "Update script has been downloaded/updated."
-    }
-    catch {
-        Write-Error "Failed to download the update script."
-        Pause
-        Exit
+
+# If the file does not exist or its content differs from the remote version, update it.
+$updateScriptNeeded = $true
+if (Test-Path $localScriptPath) {
+    $localContent = Get-Content $localScriptPath -Raw
+    if ($localContent -eq $remoteContent) {
+        Write-Host "The local update script is already the latest version."
+        $updateScriptNeeded = $false
     }
 }
 
-# --- Step 4: Check and update the BetterDiscord repository ---
-Write-Host "`n[Step 4] Checking BetterDiscord repository..."
-$repoPath = Join-Path $updateScriptFolder "BetterDiscord"
-if (-not (Test-Path $repoPath)) {
-    Write-Host "Repository not found. Cloning BetterDiscord repository..."
-    Push-Location $updateScriptFolder
-    git clone "https://github.com/BetterDiscord/BetterDiscord.git" "BetterDiscord"
+if ($updateScriptNeeded) {
+    Write-Host "Updating the BetterDiscord update script..."
+    $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
+}
+
+# ========= 4. CLONE OR UPDATE THE BETTERDISCORD REPOSITORY =========
+$repoFolder = Join-Path $updateScriptFolder "BetterDiscord"
+if (-not (Test-Path $repoFolder)) {
+    Write-Host "Cloning the BetterDiscord repository..."
+    git clone "https://github.com/BetterDiscord/BetterDiscord.git" $repoFolder
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "Repository has been cloned successfully."
-    }
-    else {
-        Write-Error "Failed to clone the repository. Check your internet connection."
+        Write-Host "Repository cloned successfully."
+    } else {
+        Write-Host "Failed to clone the repository. Check your internet connection."
         Pause
         Exit
     }
-    Pop-Location
 } else {
-    Write-Host "Repository exists. Updating repository..."
-    Push-Location $repoPath
+    Write-Host "BetterDiscord repository exists. Updating repository..."
+    Push-Location $repoFolder
     git pull
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "Repository has been updated successfully."
-    }
-    else {
-        Write-Error "Failed to update the repository."
+        Write-Host "Repository updated successfully."
+    } else {
+        Write-Host "Failed to update the repository. Check your internet connection."
+        Pop-Location
         Pause
         Exit
     }
     Pop-Location
 }
 
-# --- Step 5: Check and create the update shortcut in the Start Menu ---
-Write-Host "`n[Step 5] Checking for update shortcut in Start Menu..."
-$shortcutPath = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\BetterDiscord Update.lnk"
+# ========= 5. CREATE A START MENU SHORTCUT =========
+$startMenuFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+$shortcutPath = Join-Path $startMenuFolder "BetterDiscord Update.lnk"
 if (-not (Test-Path $shortcutPath)) {
-    Write-Host "Creating shortcut 'BetterDiscord Update'..."
+    Write-Host "Creating Start Menu shortcut for BetterDiscord Update..."
+    $target = "powershell.exe"
+    # Use the local update script file in the shortcut target
+    $arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
+
     $wshShell = New-Object -ComObject WScript.Shell
     $shortcut = $wshShell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = "powershell.exe"
-    # Note: Using the local update script path for the shortcut
-    $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
-    $shortcut.WorkingDirectory = Split-Path $localScriptPath
-    $shortcut.IconLocation = "powershell.exe, 0"
+    $shortcut.TargetPath = $target
+    $shortcut.Arguments = $arguments
+    $shortcut.WindowStyle = 1
+    $shortcut.Description = "BetterDiscord Auto-Updater Script"
     $shortcut.Save()
-    Write-Host "Shortcut created."
+    Write-Host "Shortcut created successfully."
 } else {
-    Write-Host "Update shortcut already exists."
+    Write-Host "Start Menu shortcut already exists."
 }
 
-# --- Step 6: Ensure BetterDiscord configuration folder exists ---
-Write-Host "`n[Step 6] Checking for BetterDiscord configuration folder..."
-$betterDiscordConfigPath = Join-Path $env:APPDATA "BetterDiscord"
-if (-not (Test-Path $betterDiscordConfigPath)) {
-    Write-Host "Creating BetterDiscord folder at $betterDiscordConfigPath..."
-    New-Item -Path $betterDiscordConfigPath -ItemType Directory -Force | Out-Null
+# ========= 6. ENSURE THE BETTERDISCORD FOLDER EXISTS =========
+$betterDiscordFolder = Join-Path $env:APPDATA "Roaming\BetterDiscord"
+if (-not (Test-Path $betterDiscordFolder)) {
+    Write-Host "Creating BetterDiscord folder..."
+    New-Item -ItemType Directory -Path $betterDiscordFolder -Force | Out-Null
 } else {
     Write-Host "BetterDiscord folder exists."
 }
 
-# --- Step 7: Install and build BetterDiscord in the repository folder ---
-Write-Host "`n[Step 7] Installing dependencies and building BetterDiscord..."
-Push-Location $repoPath
-# Install pnpm globally using npm
-Write-Host "Installing pnpm globally..."
+# ========= 7. INSTALL DEPENDENCIES, BUILD, AND INJECT =========
+# Change directory to the repository folder
+Push-Location $repoFolder
+
+Write-Host "Installing pnpm globally via npm..."
 npm install -g pnpm
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to install pnpm globally."
+    Write-Host "Failed to install pnpm globally."
+    Pop-Location
     Pause
     Exit
 }
 
-# Install repository dependencies, build, and inject BetterDiscord
-Write-Host "Installing repository dependencies..."
+Write-Host "Installing project dependencies using pnpm..."
 pnpm install
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to install repository dependencies."
+    Write-Host "Failed to install dependencies."
+    Pop-Location
     Pause
     Exit
 }
 
-Write-Host "Building the project..."
+Write-Host "Building the project using pnpm..."
 pnpm build
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Project build failed."
+    Write-Host "Project build failed."
+    Pop-Location
     Pause
     Exit
 }
 
-Write-Host "Injecting BetterDiscord..."
+Write-Host "Injecting BetterDiscord into Discord using pnpm..."
 pnpm inject
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Injection failed."
+    Write-Host "Injection failed."
+    Pop-Location
     Pause
     Exit
 }
 Pop-Location
 
-# --- Step 8: Launch Discord (non-console) ---
-Write-Host "`n[Step 8] Launching Discord..."
-$discordLauncher = Join-Path $env:USERPROFILE "AppData\Local\Discord\Update.exe"
-if (Test-Path $discordLauncher) {
-    Start-Process -FilePath $discordLauncher -ArgumentList "--processStart", "Discord.exe" -WindowStyle Normal
-    Write-Host "Discord is launching..."
-}
-else {
-    Write-Error "Discord launcher not found. Please check the installation."
+# ========= 8. LAUNCH DISCORD =========
+Write-Host "Launching Discord..."
+# Launch Discord via its updater executable so that it starts normally (without a console)
+$discordUpdater = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
+if (Test-Path $discordUpdater) {
+    Start-Process -FilePath $discordUpdater -ArgumentList "--processStart", "Discord.exe"
+} else {
+    Write-Host "Discord updater not found. Please check your Discord installation."
 }
 
-Write-Host "`nBetterDiscord installation completed successfully!"
+Write-Host "BetterDiscord installation/update completed successfully!"
 Start-Sleep -Seconds 3
 Exit

@@ -32,17 +32,25 @@ function Get-NodeCmd {
     elseif (Test-Path "C:\Program Files\nodejs\node.exe") {
         return "C:\Program Files\nodejs\node.exe"
     }
+    elseif (Test-Path "C:\Program Files (x86)\nodejs\node.exe") {
+        return "C:\Program Files (x86)\nodejs\node.exe"
+    }
     else {
         return $null
     }
 }
 
 function Get-NpmCmd {
+    # First, try to locate 'npm' on PATH.
     if (Get-Command npm -ErrorAction SilentlyContinue) {
         return "npm"
     }
+    # Check the typical installation paths.
     elseif (Test-Path "C:\Program Files\nodejs\npm.cmd") {
         return "C:\Program Files\nodejs\npm.cmd"
+    }
+    elseif (Test-Path "C:\Program Files (x86)\nodejs\npm.cmd") {
+        return "C:\Program Files (x86)\nodejs\npm.cmd"
     }
     else {
         return $null
@@ -254,7 +262,6 @@ if (-not (Test-Path $bdRepoDir)) {
     & $npmCmd install -g pnpm
 
     # Install repository dependencies and run build/inject commands.
-    # Using & ensures that the commands are executed properly.
     & pnpm install
     & pnpm build
     & pnpm inject

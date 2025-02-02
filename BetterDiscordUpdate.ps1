@@ -15,9 +15,16 @@
 # 8. Launches Discord (without showing the console).
 
 # ------------------------------
+# Function: Refresh PATH from Machine and User environment variables
+function Refresh-Path {
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH = "$machinePath;$userPath"
+}
+
+# ------------------------------
 # Step 1: Check if Discord is running or install Discord
 
-# Try to get the Discord process.
 $discordProcess = Get-Process -Name discord -ErrorAction SilentlyContinue
 if ($discordProcess) {
     Write-Output "Discord is running. Stopping Discord..."
@@ -25,7 +32,6 @@ if ($discordProcess) {
 } else {
     Write-Output "Discord is not running. Installing Discord silently..."
     # Download the Discord installer.
-    # Note: The installer URL and silent parameters may change over time.
     $installerUrl = "https://discord.com/api/download?platform=win"
     $installerPath = "$env:TEMP\DiscordSetup.exe"
     try {
@@ -64,6 +70,9 @@ function Ensure-Dependency {
     if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
         Write-Output "$CommandName not found. Installing $CommandName via winget..."
         winget install --id $WingetId -e $InstallArgs
+        # Allow a moment for the installation to update the system
+        Start-Sleep -Seconds 5
+        Refresh-Path
     }
     else {
         Write-Output "$CommandName is already installed."
@@ -85,18 +94,32 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Error "Failed to download Node.js MSI from $nodeMsiUrl"
         exit 1
     }
-    # Install Node.js silently using msiexec.
     $msiArgs = "/i `"$nodeMsiPath`" /qn /norestart"
     $msiProc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru
     Write-Output "Node.js installation completed."
+    Start-Sleep -Seconds 5
+    Refresh-Path
 } else {
     Write-Output "Node.js is already installed."
 }
 
-# Now check for pnpm. If not found, install it via npm.
+# Check for pnpm. If not found, install it via npm.
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
     Write-Output "pnpm not found. Installing pnpm globally via npm..."
-    npm install -g pnpm
+    # Determine the npm command. If 'npm' is not found, try the typical full path.
+    $npmCmd = ""
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        $npmCmd = "npm"
+    }
+    elseif (Test-Path "C:\Program Files\nodejs\npm.cmd") {
+        $npmCmd = "C:\Program Files\nodejs\npm.cmd"
+    }
+    else {
+        Write-Error "npm command not found. Ensure Node.js is installed correctly."
+        exit 1
+    }
+    & $npmCmd install -g pnpm
+    Refresh-Path
 } else {
     Write-Output "pnpm is already installed."
 }
@@ -115,7 +138,6 @@ if (-not (Test-Path $updateScriptDir)) {
 $localScriptPath = Join-Path $updateScriptDir "BetterDiscordUpdate.ps1"
 $remoteScriptUrl = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
 
-# Download remote script content
 try {
     $remoteResponse = Invoke-WebRequest -Uri $remoteScriptUrl -UseBasicParsing
     $remoteContent = $remoteResponse.Content
@@ -124,10 +146,8 @@ try {
     exit 1
 }
 
-# If local script exists, compare its SHA256 hash with the remote version.
 if (Test-Path $localScriptPath) {
     $localHashObj = Get-FileHash -Path $localScriptPath -Algorithm SHA256
-    # Compute SHA256 hash of the remote content.
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     $remoteBytes = [System.Text.Encoding]::UTF8.GetBytes($remoteContent)
     $remoteHashBytes = $sha256.ComputeHash($remoteBytes)
@@ -149,28 +169,38 @@ if (Test-Path $localScriptPath) {
 $bdRepoDir = Join-Path $updateScriptDir "BetterDiscord"
 if (-not (Test-Path $bdRepoDir)) {
     Write-Output "BetterDiscord repository not found. Cloning repository..."
-    git clone https://github.com/BetterDiscord/BetterDiscord.git $bdRepoDir
+    try {
+        & git clone https://github.com/BetterDiscord/BetterDiscord.git $bdRepoDir
+    }
+    catch {
+        Write-Error "Failed to clone BetterDiscord repository. Ensure Git is installed and in PATH."
+    }
 } else {
     Write-Output "BetterDiscord repository found. Updating repository..."
     Push-Location $bdRepoDir
-    git pull
+    & git pull
     Pop-Location
 }
 
 # ------------------------------
 # Step 5: Create Start Menu shortcut if it does not exist
-
-$shortcutPath = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\BetterDiscord Update.lnk"
+# Use the current user's Start Menu folder to avoid permission issues.
+$startMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+$shortcutPath = Join-Path $startMenuDir "BetterDiscord Update.lnk"
 if (-not (Test-Path $shortcutPath)) {
     Write-Output "Creating Start Menu shortcut for BetterDiscord Update..."
-    $wshell = New-Object -ComObject WScript.Shell
-    $shortcut = $wshell.CreateShortcut($shortcutPath)
-    # Set the target to PowerShell with parameters to bypass the execution policy and run this script.
-    $shortcut.TargetPath = "powershell.exe"
-    $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
-    $shortcut.WorkingDirectory = $updateScriptDir
-    $shortcut.IconLocation = "powershell.exe, 0"
-    $shortcut.Save()
+    try {
+        $wshell = New-Object -ComObject WScript.Shell
+        $shortcut = $wshell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "powershell.exe"
+        $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
+        $shortcut.WorkingDirectory = $updateScriptDir
+        $shortcut.IconLocation = "powershell.exe, 0"
+        $shortcut.Save()
+    }
+    catch {
+        Write-Error "Unable to save shortcut at $shortcutPath. Error: $_"
+    }
 } else {
     Write-Output "Start Menu shortcut already exists."
 }
@@ -189,25 +219,54 @@ if (-not (Test-Path $bdFolder)) {
 # ------------------------------
 # Step 7: Build and inject BetterDiscord
 
-Write-Output "Running build and inject steps in the BetterDiscord repository..."
-Push-Location $bdRepoDir
+if (-not (Test-Path $bdRepoDir)) {
+    Write-Error "BetterDiscord repository folder not found. Skipping build/inject steps."
+} else {
+    Write-Output "Running build and inject steps in the BetterDiscord repository..."
+    Push-Location $bdRepoDir
 
-# Ensure pnpm is installed (should already be installed via npm).
-npm install -g pnpm
+    # Ensure pnpm is installed (should already be installed via npm).
+    # Determine the npm command as before.
+    $npmCmd = ""
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        $npmCmd = "npm"
+    }
+    elseif (Test-Path "C:\Program Files\nodejs\npm.cmd") {
+        $npmCmd = "C:\Program Files\nodejs\npm.cmd"
+    }
+    else {
+        Write-Error "npm command not found. Ensure Node.js is installed correctly."
+        Pop-Location
+        exit 1
+    }
+    & $npmCmd install -g pnpm
 
-# Install repository dependencies and run build/inject commands.
-pnpm install
-pnpm build
-pnpm inject
+    # Install repository dependencies and run build/inject commands.
+    & pnpm install
+    & pnpm build
+    & pnpm inject
 
-Pop-Location
+    Pop-Location
+}
 
 # ------------------------------
 # Step 8: Launch Discord (without showing the console)
 
 Write-Output "Launching Discord..."
-try {
-    Start-Process "discord"
-} catch {
-    Write-Error "Failed to launch Discord."
+# Attempt to launch Discord using its updater if available.
+$discordUpdater = "$env:LOCALAPPDATA\Discord\Update.exe"
+if (Test-Path $discordUpdater) {
+    try {
+        Start-Process -FilePath $discordUpdater -ArgumentList "--processStart Discord.exe" -WindowStyle Hidden
+    }
+    catch {
+        Write-Error "Failed to launch Discord via Update.exe. Error: $_"
+    }
+} else {
+    try {
+        Start-Process "discord"
+    }
+    catch {
+        Write-Error "Failed to launch Discord."
+    }
 }

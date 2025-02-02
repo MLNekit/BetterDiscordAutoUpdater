@@ -1,671 +1,178 @@
-<#
-.SYNOPSIS
-    BetterDiscord Auto-Update & Installation Script with Menu
+# BetterDiscord Update Script
+# This script updates BetterDiscord by performing several steps:
+# 1. Checks if Discord is running, and if so, kills it; if not, installs it silently.
+# 2. Checks for required dependencies (git, node.js, and pnpm) and installs them if missing.
+# 3. Ensures the update script folder exists and updates the local script if an update is available.
+# 4. Clones or updates the BetterDiscord repository.
+# 5. Creates a Start Menu shortcut for this update script if one does not exist.
+# 6. Ensures the BetterDiscord folder exists.
+# 7. Runs build and injection commands in the repository folder.
+# 8. Launches Discord.
 
-.DESCRIPTION
-    Скрипт поддерживает установку Discord, BetterDiscord, автообновление скрипта,
-    а также удаление установленных компонентов. При запуске выводится меню, в котором
-    пользователь может выбрать нужный сценарий. В скрипте реализованы проверки,
-    обновление зависимостей (Git, Node.js, pnpm) и автоматическое обновление себя из GitHub.
+# ------------------------------
+# Step 1: Check if Discord is running
 
-.PARAMETER Remote
-    Запуск скрипта в удалённом режиме (без локальной установки).
-
-.PARAMETER Language
-    Язык сообщений ("en" или "ru"). Если не указан, определяется по системной культуре.
-
-.PARAMETER NoSelfUpdate
-    Внутренний переключатель для предотвращения рекурсии при самообновлении.
-#>
-
-[CmdletBinding()]
-param(
-    [switch]$Remote,
-    [string]$Language,
-    [switch]$NoSelfUpdate  # Внутренний переключатель
-)
-
-#--------------------------------------#
-# Определение языка (ru/en)            #
-#--------------------------------------#
-if (-not $Language) {
-    $sysLang = (Get-UICulture).Name
-    $Language = if ($sysLang -match "^ru") { "ru" } else { "en" }
+# Try to get the Discord process
+$discordProcess = Get-Process -Name discord -ErrorAction SilentlyContinue
+if ($discordProcess) {
+    Write-Output "Discord is running. Stopping Discord..."
+    # Kill all Discord processes
+    Stop-Process -Name discord -Force
+} else {
+    Write-Output "Discord is not running. Installing Discord silently..."
+    # Download the Discord installer.
+    # Note: The installer URL and silent parameters may change over time.
+    $installerUrl = "https://discord.com/api/download?platform=win"
+    $installerPath = "$env:TEMP\DiscordSetup.exe"
+    Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
+    # Run the installer silently. (The /S switch is assumed for silent install.)
+    Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
 }
 
-#--------------------------------------#
-# Константы и пути                     #
-#--------------------------------------#
-$requiredGitVersion  = [version]"2.47.1"
-$requiredNodeVersion = [version]"22.13.1"
+# ------------------------------
+# Step 2: Check for dependencies (git, node.js, pnpm)
 
-$gitInstallerUrl  = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
-$nodeInstallerUrl = "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi"
-$pnpmInstallerUrl = "https://get.pnpm.io/install.ps1"
-
-$scriptVersion    = "1.0.0"
-$remoteScriptUrl  = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
-
-$BaseFolder       = Join-Path $env:APPDATA "BetterDiscord Update Script"
-$LocalScriptPath  = Join-Path $BaseFolder "BetterDiscordUpdate.ps1"
-$BetterDiscordFolder = Join-Path $BaseFolder "BetterDiscord"
-$StartMenuFolder  = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-$ShortcutName     = "BetterDiscord Update.lnk"
-
-#--------------------------------------#
-# Локализованные сообщения             #
-#--------------------------------------#
-$messages = @{
-    en = @{
-        "MenuTitle"                = "BetterDiscord Auto-Update Script - Select a scenario:"
-        "Option0"                  = "0) Exit"
-        "Option1"                  = "1) Install Discord"
-        "Option2"                  = "2) Install Discord (and Start)"
-        "Option3"                  = "3) Install Discord and BetterDiscord"
-        "Option4"                  = "4) Install Discord and BetterDiscord (and Start)"
-        "Option5"                  = "5) Install BetterDiscord"
-        "Option6"                  = "6) Install BetterDiscord (and Start)"
-        "Option7"                  = "7) Install Discord, BetterDiscord and Auto-Update Script"
-        "Option8"                  = "8) Install Discord, BetterDiscord and Auto-Update Script (and Start)"
-        "Option9"                  = "9) Install/Update Auto-Update Script"
-        "Option10"                 = "10) Install/Update Auto-Update Script (and Start)"
-        "Option11"                 = "11) Uninstall Auto-Update Script"
-        "Option12"                 = "12) Uninstall Git/Node.JS/pnpm"
-        "EnterChoice"              = "Enter your choice: "
-        "InvalidChoice"            = "Invalid choice. Please try again."
-        "ErrorOccurred"            = "An error occurred: "
-        "ScriptUpdating"           = "Updating script..."
-        "ClosingDiscord"           = "Closing Discord..."
-        "DiscordRunningAbort"      = "Discord is running! Aborting scenario."
-        "DiscordNotRunning"        = "Discord is not running."
-        "DiscordNotInstalled"      = "Discord is not installed. Installing..."
-        "DiscordAlreadyInstalled"  = "Discord is already installed."
-        "InstallingDiscord"        = "Downloading and installing Discord..."
-        "DiscordInstallFailed"     = "Discord installation failed."
-        "LaunchingDiscord"         = "Launching Discord..."
-        "DiscordLaunchFailed"      = "Failed to launch Discord."
-        "CheckingGit"              = "Checking for Git..."
-        "GitInstalled"             = "Git is installed."
-        "InstallingGit"            = "Git not installed/outdated. Installing/updating Git..."
-        "GitInstalledSuccess"      = "Git installed/updated successfully."
-        "CheckingNode"             = "Checking for Node.js..."
-        "NodeInstalled"            = "Node.js is installed."
-        "InstallingNode"           = "Node.js not installed/outdated. Installing/updating Node.js..."
-        "NodeInstalledSuccess"     = "Node.js installed/updated successfully."
-        "CheckingPNPM"             = "Checking for pnpm..."
-        "PNPMInstalled"            = "pnpm is installed."
-        "InstallingPNPM"           = "pnpm not found. Installing pnpm..."
-        "PNPMInstalledSuccess"     = "pnpm installed successfully."
-        "CloningRepo"              = "BetterDiscord repository not found. Cloning repository..."
-        "RepoCloned"               = "Repository cloned successfully."
-        "RepoFound"                = "BetterDiscord repository found."
-        "UpdatingRepo"             = "Updating repository..."
-        "RepoUpdated"              = "Repository updated successfully."
-        "RepoUpdateFail"           = "Failed to update repository."
-        "InstallingDependencies"   = "Installing project dependencies..."
-        "DependenciesInstalledSuccess" = "Project dependencies installed."
-        "DependenciesInstallFail"  = "Failed to install project dependencies."
-        "BuildingProject"          = "Building BetterDiscord..."
-        "ProjectBuilt"             = "Project built successfully."
-        "ProjectBuildFail"         = "Project build failed."
-        "InjectingBetterDiscord"   = "Injecting BetterDiscord..."
-        "InjectionSuccess"         = "BetterDiscord injected successfully."
-        "InjectionFail"            = "Injection failed."
-        "AutoUpdateInstalled"      = "Auto-Update Script installed/updated successfully."
-        "AutoUpdateUninstalled"    = "Auto-Update Script uninstalled successfully."
-        "DependenciesUninstalled"  = "Uninstall command executed. Please verify manually if needed."
-        "PressEnterToContinue"     = "Press Enter to return to the menu..."
-    }
-    ru = @{
-        "MenuTitle"                = "BetterDiscord Автообновление - Выберите сценарий:"
-        "Option0"                  = "0) Выход"
-        "Option1"                  = "1) Установить Discord"
-        "Option2"                  = "2) Установить Discord (и запустить)"
-        "Option3"                  = "3) Установить Discord и BetterDiscord"
-        "Option4"                  = "4) Установить Discord и BetterDiscord (и запустить)"
-        "Option5"                  = "5) Установить BetterDiscord"
-        "Option6"                  = "6) Установить BetterDiscord (и запустить)"
-        "Option7"                  = "7) Установить Discord, BetterDiscord и Автообновление Скрипта"
-        "Option8"                  = "8) Установить Discord, BetterDiscord и Автообновление Скрипта (и запустить)"
-        "Option9"                  = "9) Установить/Обновить Автообновление Скрипта"
-        "Option10"                 = "10) Установить/Обновить Автообновление Скрипта (и запустить)"
-        "Option11"                 = "11) Удалить Автообновление Скрипта"
-        "Option12"                 = "12) Удалить Git/Node.JS/pnpm"
-        "EnterChoice"              = "Введите номер сценария: "
-        "InvalidChoice"            = "Неверный выбор. Попробуйте ещё раз."
-        "ErrorOccurred"            = "Произошла ошибка: "
-        "ScriptUpdating"           = "Обновление скрипта..."
-        "ClosingDiscord"           = "Закрытие Discord..."
-        "DiscordRunningAbort"      = "Discord запущен! Сценарий прерван."
-        "DiscordNotRunning"        = "Discord не запущен."
-        "DiscordNotInstalled"      = "Discord не установлен. Устанавливаем..."
-        "DiscordAlreadyInstalled"  = "Discord уже установлен."
-        "InstallingDiscord"        = "Загружаем и устанавливаем Discord..."
-        "DiscordInstallFailed"     = "Не удалось установить Discord."
-        "LaunchingDiscord"         = "Запуск Discord..."
-        "DiscordLaunchFailed"      = "Не удалось запустить Discord."
-        "CheckingGit"              = "Проверка наличия Git..."
-        "GitInstalled"             = "Git установлен."
-        "InstallingGit"            = "Git не установлен или устарел. Устанавливаем/обновляем Git..."
-        "GitInstalledSuccess"      = "Git успешно установлен/обновлён."
-        "CheckingNode"             = "Проверка наличия Node.js..."
-        "NodeInstalled"            = "Node.js установлен."
-        "InstallingNode"           = "Node.js не установлен или устарел. Устанавливаем/обновляем Node.js..."
-        "NodeInstalledSuccess"     = "Node.js успешно установлен/обновлён."
-        "CheckingPNPM"             = "Проверка наличия pnpm..."
-        "PNPMInstalled"            = "pnpm установлен."
-        "InstallingPNPM"           = "pnpm не найден. Устанавливаем pnpm..."
-        "PNPMInstalledSuccess"     = "pnpm успешно установлен."
-        "CloningRepo"              = "Папка BetterDiscord не найдена. Клонирование репозитория..."
-        "RepoCloned"               = "Репозиторий успешно склонирован."
-        "RepoFound"                = "Папка BetterDiscord найдена."
-        "UpdatingRepo"             = "Обновление репозитория..."
-        "RepoUpdated"              = "Репозиторий успешно обновлён."
-        "RepoUpdateFail"           = "Не удалось обновить репозиторий."
-        "InstallingDependencies"   = "Устанавливаем зависимости проекта..."
-        "DependenciesInstalledSuccess" = "Зависимости проекта успешно установлены."
-        "DependenciesInstallFail"  = "Не удалось установить зависимости проекта."
-        "BuildingProject"          = "Сборка BetterDiscord..."
-        "ProjectBuilt"             = "Проект успешно собран."
-        "ProjectBuildFail"         = "Сборка проекта не удалась."
-        "InjectingBetterDiscord"   = "Инжектинг BetterDiscord..."
-        "InjectionSuccess"         = "BetterDiscord успешно инжектирован."
-        "InjectionFail"            = "Инжектинг не удался."
-        "AutoUpdateInstalled"      = "Скрипт автообновления установлен/обновлён."
-        "AutoUpdateUninstalled"    = "Скрипт автообновления удалён."
-        "DependenciesUninstalled"  = "Команда удаления выполнена. Проверьте состояние вручную."
-        "PressEnterToContinue"     = "Нажмите Enter для возврата в меню..."
-    }
-}
-
-#--------------------------------------#
-# Функция для вывода локализованных сообщений
-#--------------------------------------#
-function Write-Message {
+# Function to check for a command and install using winget if not found.
+function Ensure-Dependency {
     param(
-        [Parameter(Mandatory)][string]$Key,
-        [string]$Additional = ""
+        [string]$CommandName,
+        [string]$WingetId,   # The Winget package identifier
+        [string]$InstallArgs = "--silent"
     )
-    if ($messages.ContainsKey($Language) -and $messages[$Language].ContainsKey($Key)) {
-        Write-Host "$($messages[$Language][$Key])$Additional"
+    if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+        Write-Output "$CommandName not found. Installing $CommandName..."
+        winget install --id $WingetId -e $InstallArgs
     }
     else {
-        Write-Host "$Key$Additional"
+        Write-Output "$CommandName is already installed."
     }
 }
 
-#--------------------------------------#
-# Функция самообновления скрипта       #
-#--------------------------------------#
-function Invoke-SelfUpdate {
-    if ($NoSelfUpdate) { return }
-    try {
-        Write-Message "ScriptUpdating"
-        $remoteResponse = Invoke-WebRequest -Uri $remoteScriptUrl -UseBasicParsing -ErrorAction Stop
-        $remoteContent = $remoteResponse.Content
-        $remoteHash = [System.BitConverter]::ToString(
-            (New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes($remoteContent))
-        ) -replace '-', ''
+# Check and install Git
+Ensure-Dependency -CommandName "git" -WingetId "Git.Git"
 
-        if (Test-Path $LocalScriptPath) {
-            $localContent = Get-Content -Path $LocalScriptPath -Raw
-            $localHash = [System.BitConverter]::ToString(
-                (New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes($localContent))
-            ) -replace '-', ''
-        }
-        else {
-            $localHash = ""
-        }
+# Check and install Node.js (which includes npm)
+Ensure-Dependency -CommandName "node" -WingetId "OpenJS.NodeJS"
 
-        if ($remoteHash -ne $localHash) {
-            $remoteContent | Out-File -FilePath $LocalScriptPath -Encoding UTF8 -Force
-            Write-Message "ScriptUpdating" " " `
-                + ($Language -eq "ru" ? "Скрипт обновлён. Перезапуск..." : "Script updated. Restarting...")
-            Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$LocalScriptPath`" -NoSelfUpdate" 
-            exit
-        }
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
+# Check for pnpm. If not available, install via npm.
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+    Write-Output "pnpm not found. Installing pnpm globally via npm..."
+    npm install -g pnpm
+} else {
+    Write-Output "pnpm is already installed."
 }
 
-#--------------------------------------#
-# Функции проверки и установки зависимостей
-#--------------------------------------#
-function Ensure-Git {
-    Write-Message "CheckingGit"
-    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
-    $needInstall = $false
-    if ($gitCmd) {
-        try {
-            $versionOutput = git --version
-            if ($versionOutput -match '(\d+\.\d+\.\d+)') {
-                $curVer = [version]$Matches[1]
-                if ($curVer -lt $requiredGitVersion) { $needInstall = $true }
-            }
-            else { $needInstall = $true }
-        }
-        catch { $needInstall = $true }
-    }
-    else { $needInstall = $true }
+# ------------------------------
+# Step 3: Ensure the update script folder exists and update the script file if needed
 
-    if ($needInstall) {
-        Write-Message "InstallingGit"
-        $gitInstaller = Join-Path $env:TEMP "git-installer.exe"
-        try {
-            Invoke-WebRequest -Uri $gitInstallerUrl -OutFile $gitInstaller -UseBasicParsing -ErrorAction Stop
-            Start-Process -FilePath $gitInstaller -ArgumentList "/VERYSILENT" -Wait
-            Write-Message "GitInstalledSuccess"
-        }
-        catch {
-            throw "Git installation failed: $($_.Exception.Message)"
-        }
-    }
-    else {
-        Write-Message "GitInstalled"
-    }
+$updateScriptDir = "$env:USERPROFILE\AppData\Roaming\BetterDiscord Update Script"
+if (-not (Test-Path $updateScriptDir)) {
+    Write-Output "Creating update script directory at: $updateScriptDir"
+    New-Item -ItemType Directory -Path $updateScriptDir | Out-Null
+} else {
+    Write-Output "Update script directory already exists."
 }
 
-function Ensure-Node {
-    Write-Message "CheckingNode"
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-    $needInstall = $false
-    if ($nodeCmd) {
-        try {
-            $nodeVerStr = (node --version).TrimStart("v")
-            $curVer = [version]$nodeVerStr
-            if ($curVer -lt $requiredNodeVersion) { $needInstall = $true }
-        }
-        catch { $needInstall = $true }
-    }
-    else { $needInstall = $true }
+$localScriptPath = Join-Path $updateScriptDir "BetterDiscordUpdate.ps1"
+$remoteScriptUrl = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
 
-    if ($needInstall) {
-        Write-Message "InstallingNode"
-        $nodeInstaller = Join-Path $env:TEMP "node-installer.msi"
-        try {
-            Invoke-WebRequest -Uri $nodeInstallerUrl -OutFile $nodeInstaller -UseBasicParsing -ErrorAction Stop
-            Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`"$nodeInstaller`"", "/quiet", "/norestart" -Wait
-            Write-Message "NodeInstalledSuccess"
-        }
-        catch {
-            throw "Node.js installation failed: $($_.Exception.Message)"
-        }
-    }
-    else {
-        Write-Message "NodeInstalled"
-    }
+# Download remote script content
+try {
+    $remoteResponse = Invoke-WebRequest -Uri $remoteScriptUrl -UseBasicParsing
+    $remoteContent = $remoteResponse.Content
+} catch {
+    Write-Error "Failed to download remote script from $remoteScriptUrl"
+    exit 1
 }
 
-function Ensure-Pnpm {
-    Write-Message "CheckingPNPM"
-    $pnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
-    if (-not $pnpmCmd) {
-        Write-Message "InstallingPNPM"
-        try {
-            Invoke-WebRequest -Uri $pnpmInstallerUrl -UseBasicParsing -ErrorAction Stop | Invoke-Expression
-            Write-Message "PNPMInstalledSuccess"
-        }
-        catch {
-            throw "pnpm installation failed: $($_.Exception.Message)"
-        }
+# If local script exists, compare its SHA256 hash with the remote version.
+if (Test-Path $localScriptPath) {
+    $localHashObj = Get-FileHash -Path $localScriptPath -Algorithm SHA256
+    # Compute SHA256 hash of the remote content
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $remoteBytes = [System.Text.Encoding]::UTF8.GetBytes($remoteContent)
+    $remoteHashBytes = $sha256.ComputeHash($remoteBytes)
+    $remoteHash = ([System.BitConverter]::ToString($remoteHashBytes)).Replace("-", "")
+    if ($localHashObj.Hash -ne $remoteHash) {
+        Write-Output "Local script is outdated. Updating the script..."
+        $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
+    } else {
+        Write-Output "Local script is up-to-date."
     }
-    else {
-        Write-Message "PNPMInstalled"
-    }
+} else {
+    Write-Output "Local script not found. Downloading the script..."
+    $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
 }
 
-#--------------------------------------#
-# Функции для работы с Discord         #
-#--------------------------------------#
-function Test-DiscordRunning {
-    return Get-Process -Name "Discord" -ErrorAction SilentlyContinue
-}
+# ------------------------------
+# Step 4: Clone or update the BetterDiscord repository
 
-function Close-Discord {
-    Write-Message "ClosingDiscord"
-    $proc = Test-DiscordRunning
-    if ($proc) {
-        Stop-Process -Name "Discord" -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-    }
-    else {
-        Write-Message "DiscordNotRunning"
-    }
-}
-
-function Test-DiscordInstalled {
-    $updatePath = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
-    return Test-Path $updatePath
-}
-
-function Install-Discord {
-    if (Test-DiscordInstalled) {
-        Write-Message "DiscordAlreadyInstalled"
-        return $true
-    }
-    Write-Message "DiscordNotInstalled"
-    Write-Message "InstallingDiscord"
-    $discordInstaller = Join-Path $env:TEMP "DiscordSetup.exe"
-    try {
-        $discordInstallerUrl = "https://discord.com/api/download?platform=win"
-        Invoke-WebRequest -Uri $discordInstallerUrl -OutFile $discordInstaller -UseBasicParsing -ErrorAction Stop
-        Start-Process -FilePath $discordInstaller -ArgumentList "/S" -Wait
-        Start-Sleep -Seconds 5
-        if (Test-DiscordInstalled) {
-            return $true
-        }
-        else {
-            throw "Installation did not complete."
-        }
-    }
-    catch {
-        throw "Discord installation failed: $($_.Exception.Message)"
-    }
-}
-
-function Launch-Discord {
-    Write-Message "LaunchingDiscord"
-    $updatePath = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
-    if (Test-Path $updatePath) {
-        try {
-            Start-Process -FilePath $updatePath -ArgumentList "--processStart Discord.exe"
-        }
-        catch {
-            throw "Discord launch failed: $($_.Exception.Message)"
-        }
-    }
-    else {
-        throw "Discord Update.exe not found."
-    }
-}
-
-#--------------------------------------#
-# Функция установки BetterDiscord      #
-#--------------------------------------#
-function Install-BetterDiscord {
-    if (-not (Test-Path $BaseFolder)) {
-        New-Item -ItemType Directory -Path $BaseFolder -Force | Out-Null
-    }
-    if (-not (Test-Path $BetterDiscordFolder)) {
-        Write-Message "CloningRepo"
-        try {
-            git clone "https://github.com/BetterDiscord/BetterDiscord.git" $BetterDiscordFolder
-            Write-Message "RepoCloned"
-        }
-        catch {
-            throw "Failed to clone BetterDiscord repository: $($_.Exception.Message)"
-        }
-    }
-    else {
-        Write-Message "RepoFound"
-    }
-
-    Push-Location $BetterDiscordFolder
-    Write-Message "UpdatingRepo"
-    try {
-        git pull | Out-Null
-        Write-Message "RepoUpdated"
-    }
-    catch {
-        throw "Failed to update repository: $($_.Exception.Message)"
-    }
-
-    Write-Message "InstallingDependencies"
-    try {
-        Ensure-Git
-        Ensure-Node
-        Ensure-Pnpm
-        pnpm install
-        Write-Message "DependenciesInstalledSuccess"
-    }
-    catch {
-        throw "Failed to install project dependencies: $($_.Exception.Message)"
-    }
-
-    Write-Message "BuildingProject"
-    try {
-        pnpm build
-        Write-Message "ProjectBuilt"
-    }
-    catch {
-        throw "Project build failed: $($_.Exception.Message)"
-    }
-
-    Write-Message "InjectingBetterDiscord"
-    try {
-        pnpm inject stable
-        Write-Message "InjectionSuccess"
-    }
-    catch {
-        throw "BetterDiscord injection failed: $($_.Exception.Message)"
-    }
+$bdRepoDir = Join-Path $updateScriptDir "BetterDiscord"
+if (-not (Test-Path $bdRepoDir)) {
+    Write-Output "BetterDiscord repository not found. Cloning repository..."
+    git clone https://github.com/BetterDiscord/BetterDiscord.git $bdRepoDir
+} else {
+    Write-Output "BetterDiscord repository found. Updating repository..."
+    Push-Location $bdRepoDir
+    git pull
     Pop-Location
 }
 
-#--------------------------------------#
-# Функции установки/обновления скрипта #
-#--------------------------------------#
-function InstallOrUpdate-AutoUpdateScript {
-    if (-not (Test-Path $BaseFolder)) {
-        New-Item -ItemType Directory -Path $BaseFolder -Force | Out-Null
-    }
-    try {
-        Copy-Item -Path $MyInvocation.MyCommand.Path -Destination $LocalScriptPath -Force
-    }
-    catch {
-        throw "Failed to copy script file: $($_.Exception.Message)"
-    }
-    try {
-        $WshShell = New-Object -ComObject WScript.Shell
-        $ShortcutPath = Join-Path $StartMenuFolder $ShortcutName
-        $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-        $Shortcut.TargetPath = "powershell.exe"
-        $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$LocalScriptPath`" -NoSelfUpdate"
-        $discordIcon = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
-        if (Test-Path $discordIcon) {
-            $Shortcut.IconLocation = $discordIcon
-        }
-        $Shortcut.Save()
-    }
-    catch {
-        throw "Failed to create Start Menu shortcut: $($_.Exception.Message)"
-    }
-    Write-Message "AutoUpdateInstalled"
+# ------------------------------
+# Step 5: Create Start Menu shortcut if not exists
+
+$shortcutPath = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\BetterDiscord Update.lnk"
+if (-not (Test-Path $shortcutPath)) {
+    Write-Output "Creating Start Menu shortcut for BetterDiscord Update..."
+    $wshell = New-Object -ComObject WScript.Shell
+    $shortcut = $wshell.CreateShortcut($shortcutPath)
+    # Set the target to PowerShell with parameters to bypass execution policy and run this script
+    $shortcut.TargetPath = "powershell.exe"
+    $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
+    $shortcut.WorkingDirectory = $updateScriptDir
+    $shortcut.IconLocation = "powershell.exe, 0"
+    $shortcut.Save()
+} else {
+    Write-Output "Start Menu shortcut already exists."
 }
 
-function Uninstall-AutoUpdateScript {
-    try {
-        if (Test-Path $BaseFolder) {
-            Remove-Item -Path $BaseFolder -Recurse -Force
-        }
-        $ShortcutPath = Join-Path $StartMenuFolder $ShortcutName
-        if (Test-Path $ShortcutPath) {
-            Remove-Item -Path $ShortcutPath -Force
-        }
-        Write-Message "AutoUpdateUninstalled"
-    }
-    catch {
-        throw "Failed to uninstall auto-update script: $($_.Exception.Message)"
-    }
+# ------------------------------
+# Step 6: Ensure the BetterDiscord folder exists
+
+$bdFolder = "$env:USERPROFILE\AppData\Roaming\BetterDiscord"
+if (-not (Test-Path $bdFolder)) {
+    Write-Output "Creating BetterDiscord folder at: $bdFolder"
+    New-Item -ItemType Directory -Path $bdFolder | Out-Null
+} else {
+    Write-Output "BetterDiscord folder already exists."
 }
 
-function Uninstall-Dependencies {
-    try {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Start-Process -FilePath "winget" -ArgumentList "uninstall --id Git.Git -e" -Wait
-            Start-Process -FilePath "winget" -ArgumentList "uninstall --id OpenJS.NodeJS -e" -Wait
-            Start-Process -FilePath "winget" -ArgumentList "uninstall --id pnpm.pnpm -e" -Wait
-        }
-        else {
-            Write-Host "winget not found. Please uninstall Git/Node.js/pnpm manually."
-        }
-        Write-Message "DependenciesUninstalled"
-    }
-    catch {
-        throw "Failed to uninstall dependencies: $($_.Exception.Message)"
-    }
-}
+# ------------------------------
+# Step 7: Build and inject BetterDiscord
 
-#--------------------------------------#
-# Сценарии (варианты меню)             #
-#--------------------------------------#
-function Scenario-InstallDiscord {
-    param(
-        [switch]$StartAfter
-    )
-    try {
-        if (Test-DiscordRunning) {
-            Write-Message "DiscordRunningAbort"
-            return
-        }
-        if (-not (Test-DiscordInstalled)) {
-            if (-not (Install-Discord)) { return }
-        }
-        if ($StartAfter) { Launch-Discord }
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
-}
+Write-Output "Installing pnpm globally (if needed) and running build steps..."
+Push-Location $bdRepoDir
 
-function Scenario-InstallDiscordAndBetterDiscord {
-    param(
-        [switch]$StartAfter,
-        [switch]$InstallDiscordSwitch  # Если true – устанавливаем Discord, иначе только проверяем наличие
-    )
-    try {
-        if ($InstallDiscordSwitch) {
-            if (Test-DiscordRunning) {
-                Write-Message "DiscordRunningAbort"
-                return
-            }
-            if (-not (Test-DiscordInstalled)) {
-                if (-not (Install-Discord)) { return }
-            }
-        }
-        else {
-            if (-not (Test-DiscordInstalled)) {
-                Write-Host ($Language -eq "ru" ? "Discord не установлен. Прерывание сценария." : "Discord is not installed. Aborting scenario.")
-                return
-            }
-            if (Test-DiscordRunning) { Close-Discord }
-        }
-        Install-BetterDiscord
-        if ($StartAfter) { Launch-Discord }
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
-}
+# (Re)install pnpm globally via npm to ensure it is available.
+npm install -g pnpm
 
-function Scenario-InstallDiscordBetterDiscordAutoUpdate {
-    param(
-        [switch]$StartAfter,
-        [switch]$InstallDiscordSwitch
-    )
-    try {
-        Scenario-InstallDiscordAndBetterDiscord -InstallDiscordSwitch:$InstallDiscordSwitch
-        InstallOrUpdate-AutoUpdateScript
-        if ($StartAfter) { Launch-Discord }
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
-}
+# Install repository dependencies and build/inject BetterDiscord
+pnpm install
+pnpm build
+pnpm inject
 
-function Scenario-AutoUpdateScriptOnly {
-    param(
-        [switch]$StartAfter
-    )
-    try {
-        InstallOrUpdate-AutoUpdateScript
-        if ($StartAfter) { Launch-Discord }
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
-}
+Pop-Location
 
-function Scenario-UninstallAutoUpdateScript {
-    try {
-        Uninstall-AutoUpdateScript
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
-}
+# ------------------------------
+# Step 8: Launch Discord (without showing the console)
 
-function Scenario-UninstallDependencies {
-    try {
-        Uninstall-Dependencies
-    }
-    catch {
-        Write-Message "ErrorOccurred" "$($_.Exception.Message)"
-    }
+Write-Output "Launching Discord..."
+# Attempt to start Discord using Start-Process.
+# Adjust the path or method if Discord is installed elsewhere.
+try {
+    # If Discord is installed in a standard location, you might adjust the path.
+    # Here we simply call "discord" so that the system can resolve it.
+    Start-Process "discord"
+} catch {
+    Write-Error "Failed to launch Discord."
 }
-
-#--------------------------------------#
-# Главное меню                        #
-#--------------------------------------#
-function Show-Menu {
-    Clear-Host
-    Write-Host "========================================="
-    Write-Host $messages[$Language]["MenuTitle"]
-    Write-Host "========================================="
-    Write-Host $messages[$Language]["Option0"]
-    Write-Host $messages[$Language]["Option1"]
-    Write-Host $messages[$Language]["Option2"]
-    Write-Host $messages[$Language]["Option3"]
-    Write-Host $messages[$Language]["Option4"]
-    Write-Host $messages[$Language]["Option5"]
-    Write-Host $messages[$Language]["Option6"]
-    Write-Host $messages[$Language]["Option7"]
-    Write-Host $messages[$Language]["Option8"]
-    Write-Host $messages[$Language]["Option9"]
-    Write-Host $messages[$Language]["Option10"]
-    Write-Host $messages[$Language]["Option11"]
-    Write-Host $messages[$Language]["Option12"]
-    Write-Host "========================================="
-}
-
-#--------------------------------------#
-# Режим установки (локальный)          #
-#--------------------------------------#
-if (-not $Remote) {
-    if (-not (Test-Path $BaseFolder)) {
-        New-Item -ItemType Directory -Path $BaseFolder -Force | Out-Null
-    }
-    if ($MyInvocation.MyCommand.Path -ne $LocalScriptPath) {
-        Copy-Item -Path $MyInvocation.MyCommand.Path -Destination $LocalScriptPath -Force
-    }
-    Invoke-SelfUpdate
-}
-
-#--------------------------------------#
-# Главный цикл меню                   #
-#--------------------------------------#
-do {
-    Show-Menu
-    $choice = Read-Host $messages[$Language]["EnterChoice"]
-    switch ($choice) {
-        "0" { break }
-        "1" { Scenario-InstallDiscord }
-        "2" { Scenario-InstallDiscord -StartAfter }
-        "3" { Scenario-InstallDiscordAndBetterDiscord -InstallDiscordSwitch -StartAfter:$false }
-        "4" { Scenario-InstallDiscordAndBetterDiscord -InstallDiscordSwitch -StartAfter }
-        "5" { Scenario-InstallDiscordAndBetterDiscord -StartAfter:$false }  # Только BetterDiscord (проверка Discord)
-        "6" { Scenario-InstallDiscordAndBetterDiscord -StartAfter }
-        "7" { Scenario-InstallDiscordBetterDiscordAutoUpdate -InstallDiscordSwitch -StartAfter:$false }
-        "8" { Scenario-InstallDiscordBetterDiscordAutoUpdate -InstallDiscordSwitch -StartAfter }
-        "9" { Scenario-AutoUpdateScriptOnly -StartAfter:$false }
-        "10" { Scenario-AutoUpdateScriptOnly -StartAfter }
-        "11" { Scenario-UninstallAutoUpdateScript }
-        "12" { Scenario-UninstallDependencies }
-        default { Write-Message "InvalidChoice" }
-    }
-    Write-Host ""
-    Write-Host $messages[$Language]["PressEnterToContinue"]
-    Read-Host
-} while ($true)

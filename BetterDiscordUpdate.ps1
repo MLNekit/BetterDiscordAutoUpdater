@@ -81,8 +81,8 @@ if ($discordProcess) {
     Write-Output "Waiting for Discord installer to complete..."
     $installerProc.WaitForExit()
 
-    # Wait an additional 60 seconds to allow installation to complete.
-    Start-Sleep -Seconds 60
+    # Wait an additional 30 seconds to allow installation to complete.
+    Start-Sleep -Seconds 30
 
     # Now check if Discord launched automatically and, if so, close it.
     $discordAfterInstall = Get-Process -Name discord -ErrorAction SilentlyContinue
@@ -131,8 +131,13 @@ if (-not (Get-NodeCmd)) {
     $msiArgs = "/i `"$nodeMsiPath`" /qn /norestart"
     $msiProc = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru
     Write-Output "Node.js installation completed."
-    Start-Sleep -Seconds 5
+    # Wait a bit longer after Node.js installation for changes to take effect.
+    Start-Sleep -Seconds 10
     Refresh-Path
+    # Explicitly add Node.js default folder if not already in PATH.
+    if (-not ($env:PATH -match "C:\\Program Files\\nodejs")) {
+        $env:PATH += ";C:\Program Files\nodejs"
+    }
 } else {
     Write-Output "Node.js is already installed."
 }

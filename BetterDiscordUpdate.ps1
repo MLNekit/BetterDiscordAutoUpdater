@@ -22,13 +22,17 @@ if ($discordRunning) {
         $discordInstaller = "$env:TEMP\DiscordSetup.exe"
         Invoke-WebRequest "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x86" -OutFile $discordInstaller
         Start-Process -FilePath $discordInstaller -ArgumentList "--silent" -Wait
+        
+        # Show confirmation message
+        Show-MessageBox -Message "Discord installation completed. Click OK to continue." -Title "Discord Setup"
+
+        if ($discordRunning) {
+            Write-Host "Closing Discord..."
+            Stop-Process -Name "Discord" -Force
+            Start-Sleep -Seconds 2
+        }
     }
     
-    # Show confirmation message
-    Show-MessageBox -Message "Discord installation completed. Click OK to continue." -Title "Discord Setup"
-    
-    # Ensure Discord is closed after installation
-    Get-Process -Name "Discord" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 #endregion
 
@@ -62,6 +66,7 @@ if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
 
 if ($dependenciesMissing) {
     Write-Host "Please restart your terminal and run the script again"
+    Pause
     exit
 }
 #endregion

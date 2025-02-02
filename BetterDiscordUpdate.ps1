@@ -9,12 +9,15 @@
     It automatically closes Discord if running, checks (and if needed, installs/updates) dependencies (Git, Node.js, pnpm) by comparing versions,
     clones or updates the BetterDiscord repository, builds it, injects it into Discord, and launches Discord.
     It also supports two languages – English ("en") and Russian ("ru") – via a message hashtable and includes a self-update feature.
-    
+
 .PARAMETER Remote
     When specified, the script will run in remote execution mode (no local installation or shortcut creation).
 
 .PARAMETER Language
     Specify the language code to use for messages ("en" for English or "ru" for Russian). Default is "en".
+
+.PARAMETER NoSelfUpdate
+    Internal switch to prevent recursive self-update. Do not use this parameter manually.
 
 .EXAMPLE
     # Run in default installation mode in English:
@@ -22,15 +25,13 @@
 
     # Run in remote execution mode in Russian:
     .\BetterDiscordUpdate.ps1 -Remote -Language ru
-
-.NOTES
-    This script should be executed with appropriate privileges (administrator if installing/updating dependencies or shortcuts).
 #>
 
 [CmdletBinding()]
 param(
     [switch]$Remote,
-    [string]$Language = "en"
+    [string]$Language = "en",
+    [switch]$NoSelfUpdate  # Internal switch to prevent recursive self-update
 )
 
 #----------------------------#
@@ -38,17 +39,17 @@ param(
 #----------------------------#
 
 # Define required versions and installer URLs
-$requiredGitVersion  = [version]"2.47.1"
-$requiredNodeVersion = [version]"22.13.1"
+$requiredGitVersion  = [version]"2.40.0"
+$requiredNodeVersion = [version]"18.18.2"
 # (For pnpm we only check if it exists; you can add version check if desired)
 
-$gitInstallerUrl  = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
-$nodeInstallerUrl = "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi"
+$gitInstallerUrl  = "https://github.com/git-for-windows/git/releases/download/v2.40.0.windows.1/Git-2.40.0-64-bit.exe"
+$nodeInstallerUrl = "https://nodejs.org/dist/v18.18.2/node-v18.18.2-x64.msi"
 # For pnpm, we run the installer script from get.pnpm.io
 $pnpmInstallerUrl = "https://get.pnpm.io/install.ps1"
 
 # Self-update configuration
-$scriptVersion = "1.0.0"  # local version (update manually when releasing changes)
+$scriptVersion = "1.0.0"  # Local version (update manually when releasing changes)
 $remoteScriptUrl = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
 
 # Base folder for local installation (if not remote)
@@ -157,7 +158,7 @@ function Write-Message {
     }
 }
 
-# Helper function: Compare version strings (if possible)
+# Helper function: Compare version strings
 function Is-VersionLessThan {
     param(
         [Parameter(Mandatory)]
@@ -172,6 +173,10 @@ function Is-VersionLessThan {
 # SELF-UPDATE (if not remote)#
 #----------------------------#
 function Self-Update {
+    # If the script was already restarted with -NoSelfUpdate, skip self-update.
+    if ($NoSelfUpdate) {
+        return
+    }
     try {
         Write-Message "ScriptUpdating"
         # Download remote script content
@@ -179,14 +184,13 @@ function Self-Update {
         $remoteHash = (New-Object -TypeName System.Security.Cryptography.SHA256Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes($remoteContent.Content))
         $remoteHashString = [BitConverter]::ToString($remoteHash) -replace '-', ''
 
-        # Read local script content
+        # Read local script content if exists
         if (Test-Path $LocalScriptPath) {
             $localContent = Get-Content -Path $LocalScriptPath -Raw
             $localHash = (New-Object -TypeName System.Security.Cryptography.SHA256Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes($localContent))
             $localHashString = [BitConverter]::ToString($localHash) -replace '-', ''
         }
         else {
-            # If local file does not exist, treat as update needed.
             $localHashString = ""
         }
 
@@ -194,8 +198,8 @@ function Self-Update {
             # Update local script file
             $remoteContent.Content | Out-File -FilePath $LocalScriptPath -Encoding UTF8
             Write-Message "ScriptUpdatedRestarting"
-            # Restart the script (using the local copy) and exit current instance
-            Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$LocalScriptPath`""
+            # Restart the script using the local copy and pass -NoSelfUpdate to prevent recursion
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$LocalScriptPath`" -NoSelfUpdate"
             exit
         }
     }
@@ -257,7 +261,6 @@ function Ensure-Node {
     if ($nodeCmd) {
         try {
             $nodeVersionOutput = node --version
-            # Remove leading "v" from version string (e.g. v18.18.2)
             $nodeVersionStr = $nodeVersionOutput.TrimStart("v")
             $currentNodeVersion = [version]$nodeVersionStr
             if (Is-VersionLessThan -Current $currentNodeVersion -Required $requiredNodeVersion) {
@@ -295,7 +298,6 @@ function Ensure-Pnpm {
     if (-not $pnpmCmd) {
         Write-Message "InstallingPNPM"
         try {
-            # Execute the installer script from pnpm
             Invoke-WebRequest -Uri $pnpmInstallerUrl -UseBasicParsing -ErrorAction Stop | Invoke-Expression
             Write-Message "PNPMInstalledSuccess"
         }
@@ -313,16 +315,16 @@ function Ensure-Pnpm {
 # MAIN EXECUTION BLOCK       #
 #----------------------------#
 try {
-    # If running in installation mode, ensure the base folder exists and copy the script to local folder.
+    # In installation mode, ensure the base folder exists and copy the script to the local folder.
     if (-not $Remote) {
         if (-not (Test-Path $BaseFolder)) {
             New-Item -ItemType Directory -Path $BaseFolder -Force | Out-Null
         }
-        # If the current script is not already the local copy, copy it.
+        # If the current script is not the local copy, copy it.
         if ($MyInvocation.MyCommand.Path -ne $LocalScriptPath) {
             Copy-Item -Path $MyInvocation.MyCommand.Path -Destination $LocalScriptPath -Force
         }
-        # Perform self-update check (only in installation mode)
+        # Perform self-update check (unless already restarted with -NoSelfUpdate)
         Self-Update
     }
     
@@ -343,7 +345,7 @@ try {
     Ensure-Pnpm
     Write-Message "DependenciesInstalled"
 
-    # Set working folder for BetterDiscord repository
+    # Clone or update the BetterDiscord repository
     if (-not (Test-Path $BetterDiscordFolder)) {
         Write-Message "CloningRepo"
         try {
@@ -359,7 +361,7 @@ try {
         Write-Message "RepoFound"
     }
 
-    # Change to the repository folder
+    # Change directory to the repository folder
     Set-Location -Path $BetterDiscordFolder
 
     # Update the repository
@@ -418,15 +420,15 @@ try {
 
     Write-Message "InstallationCompleted"
 
-    # If in installation mode, create a Start Menu shortcut for easier execution
+    # In installation mode, create a Start Menu shortcut for easier execution
     if (-not $Remote) {
         try {
             $WshShell = New-Object -ComObject WScript.Shell
             $ShortcutPath = Join-Path $StartMenuFolder $ShortcutName
             $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
             $Shortcut.TargetPath = "powershell.exe"
-            # Use ExecutionPolicy Bypass and point to the local copy of the script.
-            $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$LocalScriptPath`""
+            # Pass -NoSelfUpdate to prevent recursive update when launching via shortcut
+            $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$LocalScriptPath`" -NoSelfUpdate"
             $Shortcut.IconLocation = $discordUpdateExe  # Optionally use Discord's icon
             $Shortcut.Save()
         }
@@ -434,7 +436,7 @@ try {
             Write-Host "$($messages[$Language]['ErrorOccurred']) $($_.Exception.Message)"
         }
     }
-
+    
     # Wait a few seconds before exit
     Start-Sleep -Seconds 3
 }

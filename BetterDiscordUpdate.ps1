@@ -37,7 +37,7 @@ if (-not $Language) {
 # Константы и пути               #
 #--------------------------------#
 $requiredGitVersion  = [version]"2.47.1"
-$requiredNodeVersion = [version]"18.18.2"
+$requiredNodeVersion = [version]"22.13.1"
 
 $gitInstallerUrl  = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
 $nodeInstallerUrl = "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi"

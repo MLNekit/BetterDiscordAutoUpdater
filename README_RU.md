@@ -6,7 +6,7 @@
 
 ## 🌍 Language / Язык
 
-[🇺🇸 English](#) | [🇷🇺 Русский](#)  
+[🇺🇸 English](https://github.com/MLNekit/BetterDiscordAutoUpdater/blob/main/README.md) | [🇷🇺 Русский]([#](https://github.com/MLNekit/BetterDiscordAutoUpdater/blob/main/README_RU.md))  
 
 ---
 

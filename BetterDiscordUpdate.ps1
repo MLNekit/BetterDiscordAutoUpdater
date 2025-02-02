@@ -39,12 +39,12 @@ param(
 #----------------------------#
 
 # Define required versions and installer URLs
-$requiredGitVersion  = [version]"2.40.0"
+$requiredGitVersion  = [version]"2.47.1"
 $requiredNodeVersion = [version]"18.18.2"
 # (For pnpm we only check if it exists; you can add version check if desired)
 
-$gitInstallerUrl  = "https://github.com/git-for-windows/git/releases/download/v2.40.0.windows.1/Git-2.40.0-64-bit.exe"
-$nodeInstallerUrl = "https://nodejs.org/dist/v18.18.2/node-v18.18.2-x64.msi"
+$gitInstallerUrl  = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
+$nodeInstallerUrl = "https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi"
 # For pnpm, we run the installer script from get.pnpm.io
 $pnpmInstallerUrl = "https://get.pnpm.io/install.ps1"
 

@@ -144,6 +144,37 @@ try {
     Exit
 }
 
+# Function to compute the SHA256 hash of a string
+function Get-StringHash($string) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($string)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $hashBytes = $sha256.ComputeHash($bytes)
+    return [BitConverter]::ToString($hashBytes) -replace '-', ''
+}
+
+$remoteHash = Get-StringHash $remoteContent
+$updateScriptNeeded = $true
+
+if (Test-Path $localScriptPath) {
+    $localContent = Get-Content $localScriptPath -Raw
+    $localHash = Get-StringHash $localContent
+
+    if ($remoteHash -eq $localHash) {
+        Write-Host "Local script is already up to date."
+        $updateScriptNeeded = $false
+    } else {
+        Write-Host "An update for the script is available."
+    }
+} else {
+    Write-Host "Local script not found. Installing new version."
+}
+
+if ($updateScriptNeeded) {
+    Write-Host "Updating BetterDiscordUpdate.ps1 script..."
+    $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
+    Write-Host "Script successfully updated."
+}
+
 # If the file does not exist or its content differs from the remote version, update it.
 $updateScriptNeeded = $true
 if (Test-Path $localScriptPath) {

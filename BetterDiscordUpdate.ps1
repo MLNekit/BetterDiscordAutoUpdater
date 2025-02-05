@@ -1,11 +1,11 @@
 <#
     BetterDiscord Auto-Updater Script
-    Updated: 2025-02-02
+    Updated: 2025-02-05
 
     This script performs the following steps:
     0. If Discord is not installed, installs it silently and prompts the user to press ENTER when ready.
     1. Checks if Discord is running; if so, terminates the process.
-    2. Checks and installs dependencies (Git, Node.js, pnpm).
+    2. Checks and installs dependencies (Git, Node.js, pnpm, Bun).
     3. Ensures the update script folder exists and updates the script file if needed.
     4. Clones or updates the BetterDiscord repository.
     5. Creates a Start Menu shortcut for this updater.
@@ -98,10 +98,22 @@ if (-not $pnpmInstalled) {
     Write-Host "pnpm is installed."
 }
 
+# --- Check for Bun ---
+Write-Host "Checking for Bun..."
+$bunInstalled = Get-Command bun -ErrorAction SilentlyContinue
+if (-not $bunInstalled) {
+    Write-Host "Bun is not installed. Installing Bun..."
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-c", "irm bun.sh/install.ps1 | iex" -Wait
+    Write-Host "Bun has been installed."
+} else {
+    Write-Host "Bun is installed."
+}
+
 # Verify all dependencies are now available
 if (-not (Get-Command git -ErrorAction SilentlyContinue) -or `
     -not (Get-Command node -ErrorAction SilentlyContinue) -or `
-    -not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+    -not (Get-Command pnpm -ErrorAction SilentlyContinue) -or `
+    -not (Get-Command bun -ErrorAction SilentlyContinue)) {
     Write-Host "One or more dependencies failed to install. Please restart the script."
     Pause
     Exit

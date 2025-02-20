@@ -1,122 +1,50 @@
-<#
-    BetterDiscord Auto-Updater Script
-    Updated: 2025-02-20
-
-    This script performs the following steps:
-    0. Checks if running as administrator and relaunches if not.
-    1. Ensures Discord is installed; installs it if missing.
-    2. Terminates Discord if running.
-    3. Checks and installs dependencies (Git, Node.js, pnpm, Bun).
-    4. Ensures the update script folder exists and updates the script.
-    5. Clones or updates the BetterDiscord repository.
-    6. Creates a Start Menu shortcut for the updater.
-    7. Ensures the BetterDiscord folder exists.
-    8. Installs dependencies, builds, and injects BetterDiscord.
-    9. Launches Discord.
-#>
-
-# ========= 0. ELEVATION CHECK =========
-function Test-Administrator {
-    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $currentUser.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+# Проверка запуска от администратора
+if (-not ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    Start-Process powershell "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs; exit
 }
 
-if (-not (Test-Administrator)) {
-    Write-Host "Relaunching with administrator privileges..."
-    Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-    Exit
+# Проверка установки и завершение Discord
+$discordPath = "$env:LOCALAPPDATA\Discord"
+if (-not (Test-Path $discordPath)) {
+    Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile "$env:TEMP\DiscordSetup.exe"
+    Start-Process "$env:TEMP\DiscordSetup.exe" -ArgumentList "--silent" -Wait
 }
+Get-Process -Name "Discord" -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2
 
-# ========= 1. CHECK DISCORD INSTALLATION =========
-$discordInstallPath = Join-Path $env:LOCALAPPDATA "Discord"
-if (-not (Test-Path $discordInstallPath)) {
-    Write-Host "Discord is not installed. Downloading and installing..."
-    $discordInstaller = "$env:TEMP\DiscordSetup.exe"
-    Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile $discordInstaller
-    Start-Process -FilePath $discordInstaller -ArgumentList "--silent" -Wait
-    Read-Host -Prompt "Press ENTER to continue once installation is complete"
-}
-
-# ========= 2. TERMINATE DISCORD =========
-$discordProcess = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
-if ($discordProcess) {
-    Write-Host "Stopping Discord..."
-    Stop-Process -Name "Discord" -Force
-    Start-Sleep -Seconds 2
-}
-
-# ========= 3. INSTALL DEPENDENCIES =========
-function Install-Dependency {
-    param (
-        [string]$command, [string]$url, [string]$installerArgs = ""
-    )
-    
+# Функция установки зависимостей
+function Install-Dependency($command, $url, $args="") {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        Write-Host "$command not found. Installing..."
-        $installerPath = "$env:TEMP\$($command)-installer"
-        Invoke-WebRequest $url -OutFile $installerPath
-        if ($installerArgs) {
-            Start-Process -FilePath $installerPath -ArgumentList $installerArgs -Wait
-        } else {
-            Invoke-Expression (Get-Content $installerPath -Raw)
-        }
+        Invoke-WebRequest $url -OutFile "$env:TEMP\$command-installer"
+        Start-Process "$env:TEMP\$command-installer" -ArgumentList $args -Wait
     }
 }
 
+# Установка зависимостей
 Install-Dependency "git" ((Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest").assets | Where-Object name -match "64-bit.exe" | Select-Object -ExpandProperty browser_download_url) "/VERYSILENT"
 Install-Dependency "node" "https://nodejs.org/dist/latest/win-x64/node.exe" "/quiet /norestart"
 Install-Dependency "pnpm" "https://get.pnpm.io/install.ps1"
 Install-Dependency "bun" "https://bun.sh/install.ps1"
 
-# ========= 4. UPDATE SCRIPT =========
-$updateScriptFolder = Join-Path $env:APPDATA "BetterDiscord Update Script"
-$localScriptPath = Join-Path $updateScriptFolder "BetterDiscordUpdate.ps1"
-$remoteScriptURL = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
+# Обновление скрипта
+$scriptPath = "$env:APPDATA\BetterDiscordUpdate.ps1"
+Invoke-WebRequest "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1" -OutFile $scriptPath
 
-if (-not (Test-Path $updateScriptFolder)) { New-Item -ItemType Directory -Path $updateScriptFolder -Force | Out-Null }
-$remoteContent = (Invoke-WebRequest $remoteScriptURL -UseBasicParsing).Content
-if (-not (Test-Path $localScriptPath) -or (Get-Content $localScriptPath -Raw) -ne $remoteContent) {
-    $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
-    Write-Host "Updater script updated."
+# Клонирование/обновление BetterDiscord
+$repoPath = "$env:APPDATA\BetterDiscordRepo"
+if (-not (Test-Path $repoPath)) { git clone "https://github.com/BetterDiscord/BetterDiscord.git" $repoPath }
+else { Push-Location $repoPath; git pull; Pop-Location }
+
+# Создание ярлыка
+$shortcut = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\BetterDiscord Update.lnk"
+if (-not (Test-Path $shortcut)) {
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
+    $link.TargetPath = "powershell.exe"; $link.Arguments = "-ExecutionPolicy Bypass -File `"$scriptPath`""; $link.Save()
 }
 
-# ========= 5. CLONE/UPDATE BETTERDISCORD REPO =========
-$repoFolder = Join-Path $updateScriptFolder "BetterDiscord"
-if (-not (Test-Path $repoFolder)) {
-    git clone "https://github.com/BetterDiscord/BetterDiscord.git" $repoFolder
-} else {
-    Push-Location $repoFolder
-    git pull
-    Pop-Location
-}
+# Установка и запуск BetterDiscord
+Push-Location $repoPath; npm install -g pnpm; pnpm install; pnpm build; pnpm inject; Pop-Location
 
-# ========= 6. CREATE START MENU SHORTCUT =========
-$startMenuFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-$shortcutPath = Join-Path $startMenuFolder "BetterDiscord Update.lnk"
-if (-not (Test-Path $shortcutPath)) {
-    $wshShell = New-Object -ComObject WScript.Shell
-    $shortcut = $wshShell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = "powershell.exe"
-    $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
-    $shortcut.Save()
-}
+# Запуск Discord
+Start-Process "$env:LOCALAPPDATA\Discord\Update.exe" -ArgumentList "--processStart Discord.exe"
 
-# ========= 7. ENSURE BETTERDISCORD FOLDER EXISTS =========
-$betterDiscordFolder = Join-Path $env:APPDATA "BetterDiscord"
-if (-not (Test-Path $betterDiscordFolder)) { New-Item -ItemType Directory -Path $betterDiscordFolder -Force | Out-Null }
-
-# ========= 8. INSTALL, BUILD, AND INJECT =========
-Push-Location $repoFolder
-npm install -g pnpm
-pnpm install
-pnpm build
-pnpm inject
-Pop-Location
-
-# ========= 9. LAUNCH DISCORD =========
-$discordUpdater = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
-if (Test-Path $discordUpdater) {
-    Start-Process -FilePath $discordUpdater -ArgumentList "--processStart", "Discord.exe"
-}
-
-Write-Host "BetterDiscord installation/update completed!"
+Write-Host "BetterDiscord успешно установлен/обновлён!"

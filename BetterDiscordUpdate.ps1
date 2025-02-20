@@ -1,194 +1,99 @@
-<# 
+<#
     BetterDiscord Auto-Updater Script
-    Last Updated: 2025-02-20
+    Updated: 2025-02-20
 
     This script performs the following steps:
-      0. Checks if running as administrator and relaunches if not.
-      1. Ensures Discord is installed; installs it if missing.
-      2. Terminates Discord if running.
-      3. Checks and installs dependencies (Git, Node.js, pnpm, Bun).
-      4. Ensures the update script folder exists and updates the script.
-      5. Clones or updates the BetterDiscord repository.
-      6. Creates a Start Menu shortcut for the updater.
-      7. Ensures the BetterDiscord folder exists.
-      8. Installs dependencies, builds, and injects BetterDiscord.
-      9. Launches Discord.
-
-    Optional Parameters:
-      -PortableDependencies : Use portable versions of dependencies.
-      -Debug               : Enable debug logging.
-      -DryRun              : Simulate actions without making any changes.
+    0. Checks if running as administrator and relaunches if not.
+    1. Ensures Discord is installed; installs it if missing.
+    2. Terminates Discord if running.
+    3. Checks and installs dependencies (Git, Node.js, pnpm, Bun).
+    4. Ensures the update script folder exists and updates the script.
+    5. Clones or updates the BetterDiscord repository.
+    6. Creates a Start Menu shortcut for the updater.
+    7. Ensures the BetterDiscord folder exists.
+    8. Installs dependencies, builds, and injects BetterDiscord.
+    9. Launches Discord.
 #>
 
-[CmdletBinding()]
 param(
-    [switch]$PortableDependencies,
-    [switch]$Debug,
-    [switch]$DryRun
+    [switch]$PortableDependencies
 )
 
-# Set strict mode to catch common mistakes
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+# Variables and Constants
+$DiscordInstallPath     = Join-Path $env:LOCALAPPDATA "Discord"
+$UpdateScriptFolder     = Join-Path $env:APPDATA "BetterDiscord Update Script"
+$LocalScriptPath        = Join-Path $UpdateScriptFolder "BetterDiscordUpdate.ps1"
+$RemoteScriptURL        = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
+$RepoFolder             = Join-Path $UpdateScriptFolder "BetterDiscord"
+$BetterDiscordFolder    = Join-Path $env:APPDATA "BetterDiscord"
+$StartMenuFolder        = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+$ShortcutPath           = Join-Path $StartMenuFolder "BetterDiscord Update.lnk"
+$DependenciesPath       = Join-Path $UpdateScriptFolder "Dependencies"
+$LogFilePath            = Join-Path $UpdateScriptFolder "installation.log"
 
-# ====================================
-# CONSTANTS
-# ====================================
-# Paths & Folders
-$DISCORD_INSTALL_PATH  = Join-Path $env:LOCALAPPDATA "Discord"
-$UPDATE_SCRIPT_FOLDER  = Join-Path $env:APPDATA "BetterDiscord Update Script"
-$LOCAL_SCRIPT_PATH     = Join-Path $UPDATE_SCRIPT_FOLDER "BetterDiscordUpdate.ps1"
-$REPO_FOLDER           = Join-Path $UPDATE_SCRIPT_FOLDER "BetterDiscord"
-$BETTERDISCORD_FOLDER  = Join-Path $env:APPDATA "BetterDiscord"
-$START_MENU_FOLDER     = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-$SHORTCUT_PATH         = Join-Path $START_MENU_FOLDER "BetterDiscord Update.lnk"
-$DEPENDENCIES_PATH     = Join-Path $UPDATE_SCRIPT_FOLDER "Dependencies"
-$LOG_FILE_PATH         = Join-Path $UPDATE_SCRIPT_FOLDER "installation.log"
-
-# URLs
-$REMOTE_SCRIPT_URL     = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
-$DISCORD_DOWNLOAD_URL  = "https://discord.com/api/download?platform=win"
-
-# Dependency Versions & URLs (update these constants to use the latest versions)
-$GIT_VERSION           = "2.42.0"
-$NODE_VERSION          = "20.8.0"
-$GIT_PORTABLE_URL      = "https://github.com/git-for-windows/git/releases/latest/download/PortableGit-$GIT_VERSION-64-bit.7z.exe"
-$NODE_PORTABLE_URL     = "https://nodejs.org/dist/latest/win-x64/node.exe"
-
-# ====================================
-# LOGGING & EXECUTION FUNCTIONS
-# ====================================
-function Write-Log {
-    param(
-        [Parameter(Mandatory)]
-        [ValidateSet("INFO", "WARN", "ERROR", "DEBUG")]
-        [string]$Level,
-        [Parameter(Mandatory)]
-        [string]$Message
-    )
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logMessage = "$timestamp [$Level] - $Message"
-    Write-Output $logMessage
-    if (-not $DryRun) {
-        $logMessage | Out-File -FilePath $LOG_FILE_PATH -Append
-    }
+# Logging Function
+function Log {
+    param([string]$Message)
+    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$Timestamp - $Message" | Out-File -FilePath $LogFilePath -Append
 }
 
-function Execute-Command {
-    param(
-        [Parameter(Mandatory)]
-        [scriptblock]$ScriptBlock,
-        [string]$Description = "Executing command"
-    )
-    Write-Log -Level "DEBUG" -Message $Description
-    if (-not $DryRun) {
-        & $ScriptBlock
-    } else {
-        Write-Log -Level "INFO" -Message "DryRun: $Description simulated."
-    }
-}
-
-# ====================================
-# INITIALIZATION: Create Required Folders & Log File
-# ====================================
-function Initialize-Environment {
-    try {
-        foreach ($folder in @($UPDATE_SCRIPT_FOLDER, $DEPENDENCIES_PATH)) {
-            if (-not (Test-Path $folder)) {
-                New-Item -ItemType Directory -Path $folder -Force | Out-Null
-                Write-Log -Level "INFO" -Message "Created folder: $folder"
-            } else {
-                Write-Log -Level "DEBUG" -Message "Folder already exists: $folder"
-            }
-        }
-        if (-not (Test-Path $LOG_FILE_PATH)) {
-            New-Item -ItemType File -Path $LOG_FILE_PATH -Force | Out-Null
-            Write-Log -Level "INFO" -Message "Created log file: $LOG_FILE_PATH"
-        } else {
-            Write-Log -Level "DEBUG" -Message "Log file exists: $LOG_FILE_PATH"
-        }
-    } catch {
-        Write-Output "Error during initialization: $_"
-        Exit 1
-    }
-}
-
-# ====================================
-# 0. ELEVATION CHECK
-# ====================================
+# ========= 0. ELEVATION CHECK =========
 function Ensure-Administrator {
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-    if (-not $isAdmin) {
-        Write-Output "Relaunching with administrator privileges..."
-        Write-Log -Level "INFO" -Message "Script requires elevation. Relaunching as administrator."
+    if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+        Write-Host "Relaunching with administrator privileges..."
+        Log "Script requires elevation. Relaunching as administrator."
         $args = "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
         if ($PortableDependencies) { $args += " -PortableDependencies" }
-        if ($Debug) { $args += " -Debug" }
-        if ($DryRun) { $args += " -DryRun" }
-        if (-not $DryRun) {
-            Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs
-        }
+        Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs
         Exit
     }
 }
 
-# ====================================
-# 1. CHECK DISCORD INSTALLATION
-# ====================================
+# ========= 1. CHECK DISCORD INSTALLATION =========
 function Check-DiscordInstallation {
     try {
-        if (-not (Test-Path $DISCORD_INSTALL_PATH)) {
-            Write-Output "Discord is not installed. Downloading and installing..."
-            Write-Log -Level "INFO" -Message "Discord not found. Initiating installation."
-            $DiscordInstaller = Join-Path $env:TEMP "DiscordSetup.exe"
-            if (-not $DryRun) {
-                Invoke-WebRequest -Uri $DISCORD_DOWNLOAD_URL -OutFile $DiscordInstaller
-                # Optionally: Validate checksum or digital signature here.
-                Start-Process -FilePath $DiscordInstaller -ArgumentList "--silent" -Wait
-                Write-Output "Please complete the installation if required, then press ENTER to continue."
-                Read-Host -Prompt "Press ENTER once installation is complete"
-            } else {
-                Write-Log -Level "INFO" -Message "DryRun: Discord installation simulated."
-            }
+        if (-not (Test-Path $DiscordInstallPath)) {
+            Write-Host "Discord is not installed. Downloading and installing..."
+            Log "Discord not found. Initiating installation."
+            $DiscordInstaller = "$env:TEMP\DiscordSetup.exe"
+            Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile $DiscordInstaller
+            Start-Process -FilePath $DiscordInstaller -ArgumentList "--silent" -Wait
+            Read-Host -Prompt "Press ENTER to continue once installation is complete"
         } else {
-            Write-Output "Discord is already installed."
-            Write-Log -Level "INFO" -Message "Discord installation found."
+            Write-Host "Discord is already installed."
+            Log "Discord is installed."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to check/install Discord: $_"
+        Write-Error "Failed to install Discord: $_"
+        Log "Error installing Discord: $_"
         Exit 1
     }
 }
 
-# ====================================
-# 2. TERMINATE DISCORD PROCESSES
-# ====================================
+# ========= 2. TERMINATE DISCORD =========
 function Stop-DiscordProcesses {
     try {
-        $discordProcs = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
-        if ($discordProcs) {
-            Write-Output "Stopping Discord processes..."
-            Write-Log -Level "INFO" -Message "Found Discord process(es). Terminating."
-            if (-not $DryRun) {
-                Stop-Process -Name "Discord" -Force
-                Start-Sleep -Seconds 2
-            }
+        $DiscordProcess = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
+        if ($DiscordProcess) {
+            Write-Host "Stopping Discord..."
+            Log "Discord process found. Stopping."
+            Stop-Process -Name "Discord" -Force
+            Start-Sleep -Seconds 2
         } else {
-            Write-Output "Discord is not running."
-            Write-Log -Level "INFO" -Message "No running Discord processes found."
+            Write-Host "Discord is not running."
+            Log "Discord process not running."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Error stopping Discord: $_"
+        Write-Error "Failed to stop Discord: $_"
+        Log "Error stopping Discord: $_"
     }
 }
 
-# ====================================
-# 3. INSTALL DEPENDENCIES
-# ====================================
+# ========= 3. INSTALL DEPENDENCIES =========
 function Install-Dependencies {
-    param(
-        [switch]$Portable
-    )
+    param([switch]$Portable)
+
     if ($Portable) {
         Install-PortableDependencies
     } else {
@@ -198,53 +103,46 @@ function Install-Dependencies {
 
 function Install-PortableDependencies {
     try {
-        # Ensure Dependencies folder exists (should have been created during initialization)
-        if (-not (Test-Path $DEPENDENCIES_PATH)) {
-            New-Item -ItemType Directory -Path $DEPENDENCIES_PATH -Force | Out-Null
-            Write-Log -Level "INFO" -Message "Created Dependencies folder."
+        if (-not (Test-Path $DependenciesPath)) {
+            New-Item -ItemType Directory -Path $DependenciesPath -Force | Out-Null
         }
+
         # Portable Git
         if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-            Write-Output "Installing portable Git..."
-            Write-Log -Level "INFO" -Message "Installing portable Git."
-            $gitPortableInstaller = Join-Path $DEPENDENCIES_PATH "PortableGit.exe"
-            if (-not (Test-Path $gitPortableInstaller)) {
-                if (-not $DryRun) {
-                    Invoke-WebRequest -Uri $GIT_PORTABLE_URL -OutFile $gitPortableInstaller
-                }
+            Write-Host "Installing portable Git..."
+            Log "Installing portable Git."
+            $GitPortableUrl  = "https://github.com/git-for-windows/git/releases/latest/download/PortableGit-2.42.0-64-bit.7z.exe"
+            $GitPortablePath = Join-Path $DependenciesPath "PortableGit.exe"
+            if (-not (Test-Path $GitPortablePath)) {
+                Invoke-WebRequest $GitPortableUrl -OutFile $GitPortablePath
             }
-            Execute-Command -ScriptBlock { & $gitPortableInstaller -o ("$DEPENDENCIES_PATH\Git") -y } -Description "Extracting Portable Git"
-            $env:PATH = "$DEPENDENCIES_PATH\Git\cmd;$env:PATH"
-        } else {
-            Write-Log -Level "INFO" -Message "Git is already installed or available in system PATH."
+            & $GitPortablePath -o"$DependenciesPath\Git" -y
+            $env:PATH = "$DependenciesPath\Git\cmd;$env:PATH"
         }
+
         # Portable Node.js
         if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
-            Write-Output "Installing portable Node.js..."
-            Write-Log -Level "INFO" -Message "Installing portable Node.js."
-            $nodePortablePath = Join-Path $DEPENDENCIES_PATH "node.exe"
-            if (-not (Test-Path $nodePortablePath)) {
-                if (-not $DryRun) {
-                    Invoke-WebRequest -Uri $NODE_PORTABLE_URL -OutFile $nodePortablePath
-                }
+            Write-Host "Installing portable Node.js..."
+            Log "Installing portable Node.js."
+            $NodePortableUrl  = "https://nodejs.org/dist/latest/win-x64/node.exe"
+            $NodePortablePath = Join-Path $DependenciesPath "node.exe"
+            if (-not (Test-Path $NodePortablePath)) {
+                Invoke-WebRequest $NodePortableUrl -OutFile $NodePortablePath
             }
-            $env:PATH = "$DEPENDENCIES_PATH;$env:PATH"
-        } else {
-            Write-Log -Level "INFO" -Message "Node.js is already installed or available in system PATH."
+            $env:PATH = "$DependenciesPath;$env:PATH"
         }
+
         # Install pnpm locally
         if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-            Write-Output "Installing pnpm locally..."
-            Write-Log -Level "INFO" -Message "Installing pnpm locally."
-            if (-not $DryRun) {
-                Invoke-Expression (Invoke-WebRequest -Uri "https://get.pnpm.io/install.ps1" -UseBasicParsing).Content
-            }
+            Write-Host "Installing pnpm locally..."
+            Log "Installing pnpm locally."
+            $PnpmInstallScript = "https://get.pnpm.io/install.ps1"
+            Invoke-Expression (Invoke-WebRequest $PnpmInstallScript -UseBasicParsing).Content
             $env:PATH = "$env:APPDATA\npm;$env:PATH"
-        } else {
-            Write-Log -Level "INFO" -Message "pnpm is already installed."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to install portable dependencies: $_"
+        Write-Error "Failed to install portable dependencies: $_"
+        Log "Error installing portable dependencies: $_"
         Exit 1
     }
 }
@@ -257,291 +155,248 @@ function Install-SystemDependencies {
             [string]$InstallerArgs = ""
         )
         if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
-            Write-Output "$Command not found. Installing..."
-            Write-Log -Level "INFO" -Message "Installing $Command."
-            $installerPath = Join-Path $env:TEMP "$Command-installer.exe"
-            if (-not $DryRun) {
-                Invoke-WebRequest -Uri $Url -OutFile $installerPath
-                # Optionally: Validate digital signature or checksum here.
-                if ($InstallerArgs) {
-                    Start-Process -FilePath $installerPath -ArgumentList $InstallerArgs -Wait
-                } else {
-                    Start-Process -FilePath $installerPath -Wait
-                }
+            Write-Host "$Command not found. Installing..."
+            Log "Installing $Command."
+            $InstallerPath = "$env:TEMP\$($Command)-installer.exe"
+            Invoke-WebRequest $Url -OutFile $InstallerPath
+            if ($InstallerArgs) {
+                Start-Process -FilePath $InstallerPath -ArgumentList $InstallerArgs -Wait
             } else {
-                Write-Log -Level "INFO" -Message "DryRun: $Command installation simulated."
+                Start-Process -FilePath $InstallerPath -Wait
             }
         } else {
-            Write-Output "$Command is already installed."
-            Write-Log -Level "INFO" -Message "$Command is already installed."
+            Write-Host "$Command is already installed."
+            Log "$Command is already installed."
         }
     }
+
     try {
-        # Install Git using GitHub API to retrieve the latest installer URL
-        $gitApiUrl = "https://api.github.com/repos/git-for-windows/git/releases/latest"
-        if (-not $DryRun) {
-            $gitRelease = Invoke-RestMethod -Uri $gitApiUrl
-            $gitAsset = $gitRelease.assets | Where-Object { $_.name -match "64-bit.exe" } | Select-Object -First 1
-            $gitUrl = $gitAsset.browser_download_url
-        } else {
-            $gitUrl = "https://example.com/dummy-git-installer.exe"
-        }
-        Install-Dependency -Command "git" -Url $gitUrl -InstallerArgs "/VERYSILENT"
+        # Install Git
+        $GitUrl = ((Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest").assets | Where-Object name -match "64-bit.exe" | Select-Object -ExpandProperty browser_download_url)
+        Install-Dependency "git" $GitUrl "/VERYSILENT"
 
         # Install Node.js
-        $nodeInstallerUrl = "https://nodejs.org/dist/latest/node-v$NODE_VERSION-x64.msi"
-        Install-Dependency -Command "node" -Url $nodeInstallerUrl -InstallerArgs "/quiet /norestart"
+        Install-Dependency "node" "https://nodejs.org/dist/latest/node-v20.8.0-x64.msi" "/quiet /norestart"
 
-        # Install pnpm globally
+        # Install pnpm
         if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-            Write-Output "Installing pnpm globally..."
-            Write-Log -Level "INFO" -Message "Installing pnpm globally."
-            if (-not $DryRun) {
-                Invoke-Expression (Invoke-WebRequest -Uri "https://get.pnpm.io/install.ps1" -UseBasicParsing).Content
-            }
+            Write-Host "Installing pnpm globally..."
+            Log "Installing pnpm globally."
+            Invoke-Expression (Invoke-WebRequest "https://get.pnpm.io/install.ps1" -UseBasicParsing).Content
         } else {
-            Write-Log -Level "INFO" -Message "pnpm is already installed."
+            Write-Host "pnpm is already installed."
+            Log "pnpm is already installed."
         }
 
         # Install Bun
         if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-            Write-Output "Installing Bun..."
-            Write-Log -Level "INFO" -Message "Installing Bun."
-            if (-not $DryRun) {
-                Invoke-Expression (Invoke-WebRequest -Uri "https://bun.sh/install.ps1" -UseBasicParsing).Content
-            }
+            Write-Host "Installing Bun..."
+            Log "Installing Bun."
+            Invoke-Expression (Invoke-WebRequest "https://bun.sh/install.ps1" -UseBasicParsing).Content
         } else {
-            Write-Log -Level "INFO" -Message "Bun is already installed."
+            Write-Host "Bun is already installed."
+            Log "Bun is already installed."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to install system dependencies: $_"
+        Write-Error "Failed to install system dependencies: $_"
+        Log "Error installing system dependencies: $_"
         Exit 1
     }
 }
 
-# ====================================
-# 4. UPDATE THE SCRIPT ITSELF
-# ====================================
+# ========= 4. UPDATE SCRIPT =========
 function Update-Script {
     try {
-        if (-not (Test-Path $UPDATE_SCRIPT_FOLDER)) {
-            if (-not $DryRun) {
-                New-Item -ItemType Directory -Path $UPDATE_SCRIPT_FOLDER -Force | Out-Null
-            }
-            Write-Log -Level "INFO" -Message "Created Update Script folder."
+        if (-not (Test-Path $UpdateScriptFolder)) {
+            New-Item -ItemType Directory -Path $UpdateScriptFolder -Force | Out-Null
         }
-        # Backup current script
-        if (Test-Path $LOCAL_SCRIPT_PATH) {
-            $backupPath = "$LOCAL_SCRIPT_PATH.bak"
-            if (-not $DryRun) {
-                Copy-Item -Path $LOCAL_SCRIPT_PATH -Destination $backupPath -Force
-            }
-            Write-Log -Level "DEBUG" -Message "Backup of script created at $backupPath."
-        }
-        # Use a flag file to avoid recursive updates
-        $updateFlagFile = Join-Path $UPDATE_SCRIPT_FOLDER "update.flag"
-        if (Test-Path $updateFlagFile) {
-            Write-Output "Script update already performed this session. Skipping update."
-            Write-Log -Level "INFO" -Message "Script update already performed this session."
+
+        # Path to a temporary flag file indicating an update has occurred
+        $UpdateFlagFile = Join-Path $UpdateScriptFolder "update.flag"
+
+        if (Test-Path $UpdateFlagFile) {
+            Write-Host "Script has already been updated in this session. Skipping update to prevent recursion."
+            Log "Script update already performed in this session. Skipping."
             return
         }
-        $remoteContent = ""
-        if (-not $DryRun) {
-            $remoteContent = (Invoke-WebRequest -Uri $REMOTE_SCRIPT_URL -UseBasicParsing).Content
-        } else {
-            $remoteContent = "DryRun content"
-        }
-        $needsUpdate = $true
-        if (Test-Path $LOCAL_SCRIPT_PATH) {
-            $localContent = Get-Content -Path $LOCAL_SCRIPT_PATH -Raw
-            if ($localContent -eq $remoteContent) {
-                $needsUpdate = $false
+
+        $RemoteContent = (Invoke-WebRequest $RemoteScriptURL -UseBasicParsing).Content
+        $NeedsUpdate = $true
+
+        if (Test-Path $LocalScriptPath) {
+            $LocalContent = Get-Content $LocalScriptPath -Raw
+            if ($LocalContent -eq $RemoteContent) {
+                $NeedsUpdate = $false
             }
         }
-        if ($needsUpdate) {
-            Write-Output "Updater script updated. Relaunching..."
-            Write-Log -Level "INFO" -Message "Updater script updated from remote source."
-            if (-not $DryRun) {
-                $remoteContent | Out-File -FilePath $LOCAL_SCRIPT_PATH -Encoding utf8
-                # Create update flag file
-                New-Item -Path $updateFlagFile -ItemType File -Force | Out-Null
-                $args = "-ExecutionPolicy Bypass -File `"$LOCAL_SCRIPT_PATH`""
-                if ($PortableDependencies) { $args += " -PortableDependencies" }
-                if ($Debug) { $args += " -Debug" }
-                if ($DryRun) { $args += " -DryRun" }
-                Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs
-                Exit
-            } else {
-                Write-Log -Level "INFO" -Message "DryRun: Script update simulated."
-            }
+
+        if ($NeedsUpdate) {
+            Write-Host "Updater script updated. Relaunching..."
+            Log "Updater script updated from remote source."
+            $RemoteContent | Out-File -FilePath $LocalScriptPath -Encoding utf8
+
+            # Create the flag file to indicate an update has occurred
+            New-Item -Path $UpdateFlagFile -ItemType File -Force | Out-Null
+
+            # Relaunch the updated script
+            $args = "-ExecutionPolicy Bypass -File `"$LocalScriptPath`""
+            if ($PortableDependencies) { $args += " -PortableDependencies" }
+            Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs
+            Exit
         } else {
-            Write-Output "Updater script is up to date."
-            Write-Log -Level "INFO" -Message "Updater script is current."
+            Write-Host "Updater script is up to date."
+            Log "Updater script is current."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to update script: $_"
+        Write-Error "Failed to update script: $_"
+        Log "Error updating script: $_"
         Exit 1
     }
 }
 
-# ====================================
-# 5. CLONE OR UPDATE THE BETTERDISCORD REPOSITORY
-# ====================================
+# ========= 5. CLONE/UPDATE BETTERDISCORD REPO =========
 function Update-BetterDiscordRepo {
     try {
-        if (-not (Test-Path $REPO_FOLDER)) {
-            Write-Output "Cloning BetterDiscord repository..."
-            Write-Log -Level "INFO" -Message "Cloning BetterDiscord repository."
-            if (-not $DryRun) {
-                git clone "https://github.com/BetterDiscord/BetterDiscord.git" $REPO_FOLDER
-            } else {
-                Write-Log -Level "INFO" -Message "DryRun: Repository cloning simulated."
-            }
+        if (-not (Test-Path $RepoFolder)) {
+            Write-Host "Cloning BetterDiscord repository..."
+            Log "Cloning BetterDiscord repository."
+            git clone "https://github.com/BetterDiscord/BetterDiscord.git" $RepoFolder
         } else {
-            Write-Output "Updating BetterDiscord repository..."
-            Write-Log -Level "INFO" -Message "Updating BetterDiscord repository."
-            if (-not $DryRun) {
-                Push-Location $REPO_FOLDER
-                git pull
-                Pop-Location
-            } else {
-                Write-Log -Level "INFO" -Message "DryRun: Repository update simulated."
-            }
+            Write-Host "Updating BetterDiscord repository..."
+            Log "Updating BetterDiscord repository."
+            Push-Location $RepoFolder
+            git pull
+            Pop-Location
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to update BetterDiscord repository: $_"
+        Write-Error "Failed to update BetterDiscord repository: $_"
+        Log "Error updating BetterDiscord repository: $_"
         Exit 1
     }
 }
 
-# ====================================
-# 6. CREATE A START MENU SHORTCUT FOR THE UPDATER
-# ====================================
+# ========= 6. CREATE START MENU SHORTCUT =========
 function Create-StartMenuShortcut {
     try {
-        if (-not (Test-Path $SHORTCUT_PATH)) {
-            Write-Output "Creating Start Menu shortcut..."
-            Write-Log -Level "INFO" -Message "Creating Start Menu shortcut."
-            $wshShell = New-Object -ComObject WScript.Shell
-            $shortcut = $wshShell.CreateShortcut($SHORTCUT_PATH)
-            $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-            $scriptPathForArgs = $LOCAL_SCRIPT_PATH
-            if ($scriptPathForArgs -match "\s") {
-                $scriptPathForArgs = "`"" + $scriptPathForArgs + "`""
+        if (-not (Test-Path $ShortcutPath)) {
+            Write-Host "Creating Start Menu shortcut..."
+            Log "Creating Start Menu shortcut."
+            $WshShell = New-Object -ComObject WScript.Shell
+            $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+            
+            $Shortcut.TargetPath = (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")
+            
+            if ($LocalScriptPath -match "\s") {
+                $LocalScriptPath = "`"" + $LocalScriptPath + "`""
             }
-            $arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File $scriptPathForArgs"
-            if ($PortableDependencies) { $arguments += " -PortableDependencies" }
-            if ($Debug) { $arguments += " -Debug" }
-            if ($DryRun) { $arguments += " -DryRun" }
-            $shortcut.Arguments = $arguments
-            $iconPath = Join-Path $DISCORD_INSTALL_PATH "app.ico"
-            if (Test-Path $iconPath) {
-                $shortcut.IconLocation = $iconPath
+            $Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File $LocalScriptPath"
+            if ($PortableDependencies) {
+                $Arguments += " -PortableDependencies"
+            }
+            $Shortcut.Arguments = $Arguments
+            
+            $IconPath = Join-Path $DiscordInstallPath "app.ico"
+            if (Test-Path $IconPath) {
+                $Shortcut.IconLocation = $IconPath
             } else {
-                Write-Log -Level "WARN" -Message "Icon file not found at $iconPath. Using default icon."
+                Write-Error "Icon file not found: $IconPath"
+                Log "Icon file not found: $IconPath"
             }
-            $shortcut.Save()
-            Write-Output "Shortcut created. Restart your Start Menu if necessary."
-            Write-Log -Level "INFO" -Message "Start Menu shortcut created."
+            
+            $Shortcut.Save()
+
+            Stop-Process -Name explorer -Force
+            Start-Process explorer
         } else {
-            Write-Output "Start Menu shortcut already exists."
-            Write-Log -Level "INFO" -Message "Start Menu shortcut exists."
+            Write-Host "Start Menu shortcut already exists."
+            Log "Start Menu shortcut already exists."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to create Start Menu shortcut: $_"
+        Write-Error "Failed to create Start Menu shortcut: $_"
+        Log "Error creating Start Menu shortcut: $_"
     }
 }
 
-# ====================================
-# 7. ENSURE THE BETTERDISCORD FOLDER EXISTS
-# ====================================
+# ========= 7. ENSURE BETTERDISCORD FOLDER EXISTS =========
 function Ensure-BetterDiscordFolder {
     try {
-        if (-not (Test-Path $BETTERDISCORD_FOLDER)) {
-            if (-not $DryRun) {
-                New-Item -ItemType Directory -Path $BETTERDISCORD_FOLDER -Force | Out-Null
-            }
-            Write-Output "Created BetterDiscord folder."
-            Write-Log -Level "INFO" -Message "BetterDiscord folder created."
+        if (-not (Test-Path $BetterDiscordFolder)) {
+            New-Item -ItemType Directory -Path $BetterDiscordFolder -Force | Out-Null
+            Write-Host "Created BetterDiscord folder."
+            Log "BetterDiscord folder created."
         } else {
-            Write-Output "BetterDiscord folder already exists."
-            Write-Log -Level "INFO" -Message "BetterDiscord folder exists."
+            Write-Host "BetterDiscord folder already exists."
+            Log "BetterDiscord folder exists."
         }
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to ensure BetterDiscord folder: $_"
+        Write-Error "Failed to ensure BetterDiscord folder: $_"
+        Log "Error ensuring BetterDiscord folder: $_"
         Exit 1
     }
 }
 
-# ====================================
-# 8. INSTALL, BUILD, AND INJECT BETTERDISCORD
-# ====================================
+# ========= 8. INSTALL, BUILD, AND INJECT BETTERDISCORD =========
 function Install-BetterDiscord {
     try {
-        if (-not (Test-Path $REPO_FOLDER)) {
-            Write-Log -Level "ERROR" -Message "Repository folder not found. Cannot build BetterDiscord."
-            Exit 1
-        }
-        Push-Location $REPO_FOLDER
-        # Ensure pnpm is available
+        Push-Location $RepoFolder
+
+        # Install pnpm if not already installed
         if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-            Write-Output "Installing pnpm..."
-            Write-Log -Level "INFO" -Message "Installing pnpm."
-            if (-not $DryRun) {
-                npm install -g pnpm
-            }
+            Write-Host "Installing pnpm..."
+            Log "Installing pnpm."
+            npm install -g pnpm
         }
-        Write-Output "Installing BetterDiscord dependencies..."
-        Write-Log -Level "INFO" -Message "Installing BetterDiscord dependencies."
-        if (-not $DryRun) {
-            pnpm install
-        }
-        Write-Output "Building BetterDiscord..."
-        Write-Log -Level "INFO" -Message "Building BetterDiscord."
-        if (-not $DryRun) {
-            pnpm build
-        }
-        Write-Output "Injecting BetterDiscord..."
-        Write-Log -Level "INFO" -Message "Injecting BetterDiscord."
-        if (-not $DryRun) {
-            pnpm inject
-        }
+
+        Write-Host "Installing BetterDiscord dependencies..."
+        Log "Installing BetterDiscord dependencies."
+        pnpm install
+
+        Write-Host "Building BetterDiscord..."
+        Log "Building BetterDiscord."
+        pnpm build
+
+        Write-Host "Injecting BetterDiscord..."
+        Log "Injecting BetterDiscord."
+        pnpm inject
+
         Pop-Location
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to install BetterDiscord: $_"
+        Write-Error "Failed to install BetterDiscord: $_"
+        Log "Error installing BetterDiscord: $_"
         Exit 1
     }
 }
 
-# ====================================
-# 9. LAUNCH DISCORD
-# ====================================
+# ========= 9. LAUNCH DISCORD =========
 function Launch-Discord {
     try {
-        $discordUpdater = Join-Path $DISCORD_INSTALL_PATH "Update.exe"
-        if (Test-Path $discordUpdater) {
-            Write-Output "Launching Discord..."
-            Write-Log -Level "INFO" -Message "Launching Discord."
-            if (-not $DryRun) {
-                Start-Process -FilePath $discordUpdater -ArgumentList "--processStart", "Discord.exe"
-            }
+        $DiscordUpdater = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
+        if (Test-Path $DiscordUpdater) {
+            Write-Host "Launching Discord..."
+            Log "Launching Discord."
+            Start-Process -FilePath $DiscordUpdater -ArgumentList "--processStart", "Discord.exe"
         } else {
-            Write-Log -Level "ERROR" -Message "Discord updater not found."
+            Write-Error "Discord updater not found."
+            Log "Discord updater not found."
         }
-        Write-Output "BetterDiscord installation/update completed!"
-        Write-Log -Level "INFO" -Message "BetterDiscord installation/update completed."
+
+        Write-Host "BetterDiscord installation/update completed!"
+        Log "BetterDiscord installation/update completed."
     } catch {
-        Write-Log -Level "ERROR" -Message "Failed to launch Discord: $_"
+        Write-Error "Failed to launch Discord: $_"
+        Log "Error launching Discord: $_"
     }
 }
 
-# ====================================
-# MAIN SCRIPT EXECUTION
-# ====================================
+# ========= MAIN SCRIPT EXECUTION =========
 try {
-    Initialize-Environment
-    Write-Log -Level "INFO" -Message "Script execution started."
-    
+
+    if (-not (Test-Path $UpdateScriptFolder)) {
+        New-Item -ItemType Directory -Path $UpdateScriptFolder -Force | Out-Null
+    }
+
+    Log "Script execution started."
+
     Ensure-Administrator
     Update-Script
     Install-Dependencies -Portable:$PortableDependencies
@@ -553,13 +408,15 @@ try {
     Install-BetterDiscord
     Launch-Discord
 
-    # Remove the update flag for future sessions
-    $updateFlagFile = Join-Path $UPDATE_SCRIPT_FOLDER "update.flag"
-    if (Test-Path $updateFlagFile -and -not $DryRun) {
-        Remove-Item -Path $updateFlagFile -Force
+    # Remove the update flag file to allow updates in the next session
+    $UpdateFlagFile = Join-Path $UpdateScriptFolder "update.flag"
+    if (Test-Path $UpdateFlagFile) {
+        Remove-Item $UpdateFlagFile -Force
     }
-    Write-Log -Level "INFO" -Message "Script execution completed successfully."
+
+    Log "Script execution completed successfully."
 } catch {
-    Write-Log -Level "ERROR" -Message "An unexpected error occurred: $_"
+    Write-Error "An unexpected error occurred: $_"
+    Log "Unexpected error: $_"
     Exit 1
 }

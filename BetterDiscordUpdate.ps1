@@ -514,6 +514,10 @@ function Launch-Discord {
 # MAIN SCRIPT EXECUTION
 # ===============================
 try {
+    if (-not (Test-Path $UpdateScriptFolder)) {
+        New-Item -ItemType Directory -Path $UpdateScriptFolder -Force | Out-Null
+    }
+
     Write-Log -Level "INFO" -Message "Script execution started."
     
     Ensure-Administrator

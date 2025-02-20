@@ -1,6 +1,6 @@
 <#
     BetterDiscord Auto-Updater Script
-    Updated: 2025-02-05
+    Updated: 2025-02-20
 
     This script performs the following steps:
     0. Checks if running as administrator and relaunches if not.
@@ -63,8 +63,8 @@ function Install-Dependency {
     }
 }
 
-Install-Dependency "git" "https://github.com/git-for-windows/git/releases/latest/download/Git-64-bit.exe" "/VERYSILENT"
-Install-Dependency "node" "https://nodejs.org/dist/latest/node-x64.msi" "/quiet /norestart"
+Install-Dependency "git" ((Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest").assets | Where-Object name -match "64-bit.exe" | Select-Object -ExpandProperty browser_download_url) "/VERYSILENT"
+Install-Dependency "node" "https://nodejs.org/dist/latest/win-x64/node.exe" "/quiet /norestart"
 Install-Dependency "pnpm" "https://get.pnpm.io/install.ps1"
 Install-Dependency "bun" "https://bun.sh/install.ps1"
 

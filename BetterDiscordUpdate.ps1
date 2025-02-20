@@ -76,6 +76,40 @@ function Execute-Command {
 }
 
 # ===============================
+# INITIALIZATION: Create Necessary Folders and Log File
+# ===============================
+function Initialize-Environment {
+    try {
+        # Create Update Script Folder
+        if (-not (Test-Path $UpdateScriptFolder)) {
+            New-Item -ItemType Directory -Path $UpdateScriptFolder -Force | Out-Null
+            Write-Log -Level "INFO" -Message "Created Update Script folder at $UpdateScriptFolder."
+        } else {
+            Write-Log -Level "DEBUG" -Message "Update Script folder already exists at $UpdateScriptFolder."
+        }
+
+        # Create Dependencies Folder
+        if (-not (Test-Path $DependenciesPath)) {
+            New-Item -ItemType Directory -Path $DependenciesPath -Force | Out-Null
+            Write-Log -Level "INFO" -Message "Created Dependencies folder at $DependenciesPath."
+        } else {
+            Write-Log -Level "DEBUG" -Message "Dependencies folder already exists at $DependenciesPath."
+        }
+
+        # Create Log File if it does not exist
+        if (-not (Test-Path $LogFilePath)) {
+            New-Item -ItemType File -Path $LogFilePath -Force | Out-Null
+            Write-Log -Level "INFO" -Message "Created log file at $LogFilePath."
+        } else {
+            Write-Log -Level "DEBUG" -Message "Log file already exists at $LogFilePath."
+        }
+    } catch {
+        Write-Output "Error initializing environment: $_"
+        Exit 1
+    }
+}
+
+# ===============================
 # 0. ELEVATION CHECK
 # ===============================
 function Ensure-Administrator {
@@ -158,9 +192,7 @@ function Install-Dependencies {
 function Install-PortableDependencies {
     try {
         if (-not (Test-Path $DependenciesPath)) {
-            if (-not $DryRun) {
-                New-Item -ItemType Directory -Path $DependenciesPath -Force | Out-Null
-            }
+            New-Item -ItemType Directory -Path $DependenciesPath -Force | Out-Null
             Write-Log -Level "INFO" -Message "Dependencies folder created."
         }
 
@@ -514,9 +546,8 @@ function Launch-Discord {
 # MAIN SCRIPT EXECUTION
 # ===============================
 try {
-    if (-not (Test-Path $UpdateScriptFolder)) {
-        New-Item -ItemType Directory -Path $UpdateScriptFolder -Force | Out-Null
-    }
+    # Initialize all required directories and log file
+    Initialize-Environment
 
     Write-Log -Level "INFO" -Message "Script execution started."
     

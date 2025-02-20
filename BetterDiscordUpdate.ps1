@@ -283,14 +283,30 @@ function Create-StartMenuShortcut {
             Log "Creating Start Menu shortcut."
             $WshShell = New-Object -ComObject WScript.Shell
             $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-            $Shortcut.TargetPath = "powershell.exe"
-            $Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$LocalScriptPath`""
+            
+            $Shortcut.TargetPath = (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")
+            
+            if ($LocalScriptPath -match "\s") {
+                $LocalScriptPath = "`"" + $LocalScriptPath + "`""
+            }
+            $Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File $LocalScriptPath"
             if ($PortableDependencies) {
                 $Arguments += " -PortableDependencies"
             }
             $Shortcut.Arguments = $Arguments
-            $Shortcut.IconLocation = (Join-Path $DiscordInstallPath "app.ico")
+            
+            $IconPath = Join-Path $DiscordInstallPath "app.ico"
+            if (Test-Path $IconPath) {
+                $Shortcut.IconLocation = $IconPath
+            } else {
+                Write-Error "Icon file not found: $IconPath"
+                Log "Icon file not found: $IconPath"
+            }
+            
             $Shortcut.Save()
+
+            Stop-Process -Name explorer -Force
+            Start-Process explorer
         } else {
             Write-Host "Start Menu shortcut already exists."
             Log "Start Menu shortcut already exists."

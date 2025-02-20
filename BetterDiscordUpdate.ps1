@@ -1,6 +1,6 @@
 <#
     BetterDiscord Auto-Updater Script
-    Updated: 2024-02-20
+    Updated: 2025-02-20
 
     This script performs the following steps:
     0. Checks if running as administrator and relaunches if not.
@@ -133,11 +133,13 @@ function Install-PortableDependencies {
         }
 
         # Install pnpm locally
-        Write-Host "Installing pnpm..."
-        Log "Installing pnpm locally."
-        $PnpmInstallScript = "https://get.pnpm.io/install.ps1"
-        Invoke-Expression (Invoke-WebRequest $PnpmInstallScript -UseBasicParsing).Content
-        $env:PATH = "$env:APPDATA\npm;$env:PATH"
+        if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing pnpm locally..."
+            Log "Installing pnpm locally."
+            $PnpmInstallScript = "https://get.pnpm.io/install.ps1"
+            Invoke-Expression (Invoke-WebRequest $PnpmInstallScript -UseBasicParsing).Content
+            $env:PATH = "$env:APPDATA\npm;$env:PATH"
+        }
     } catch {
         Write-Error "Failed to install portable dependencies: $_"
         Log "Error installing portable dependencies: $_"
@@ -178,7 +180,7 @@ function Install-SystemDependencies {
 
         # Install pnpm
         if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing pnpm..."
+            Write-Host "Installing pnpm globally..."
             Log "Installing pnpm globally."
             Invoke-Expression (Invoke-WebRequest "https://get.pnpm.io/install.ps1" -UseBasicParsing).Content
         } else {
@@ -208,6 +210,16 @@ function Update-Script {
         if (-not (Test-Path $UpdateScriptFolder)) {
             New-Item -ItemType Directory -Path $UpdateScriptFolder -Force | Out-Null
         }
+
+        # Path to a temporary flag file indicating an update has occurred
+        $UpdateFlagFile = Join-Path $UpdateScriptFolder "update.flag"
+
+        if (Test-Path $UpdateFlagFile) {
+            Write-Host "Script has already been updated in this session. Skipping update to prevent recursion."
+            Log "Script update already performed in this session. Skipping."
+            return
+        }
+
         $RemoteContent = (Invoke-WebRequest $RemoteScriptURL -UseBasicParsing).Content
         $NeedsUpdate = $true
 
@@ -222,6 +234,9 @@ function Update-Script {
             Write-Host "Updater script updated. Relaunching..."
             Log "Updater script updated from remote source."
             $RemoteContent | Out-File -FilePath $LocalScriptPath -Encoding utf8
+
+            # Create the flag file to indicate an update has occurred
+            New-Item -Path $UpdateFlagFile -ItemType File -Force | Out-Null
 
             # Relaunch the updated script
             $args = "-ExecutionPolicy Bypass -File `"$LocalScriptPath`""
@@ -371,6 +386,12 @@ try {
     Ensure-BetterDiscordFolder
     Install-BetterDiscord
     Launch-Discord
+
+    # Remove the update flag file to allow updates in the next session
+    $UpdateFlagFile = Join-Path $UpdateScriptFolder "update.flag"
+    if (Test-Path $UpdateFlagFile) {
+        Remove-Item $UpdateFlagFile -Force
+    }
 
     Log "Script execution completed successfully."
 } catch {

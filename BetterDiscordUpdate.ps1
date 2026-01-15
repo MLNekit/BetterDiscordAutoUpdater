@@ -25,7 +25,7 @@ function Write-Log {
 }
 
 function Refresh-EnvironmentVariables {
-    # Refreshes the PATH variable in the current session without restarting
+    # Refreshes the PATH variable in the current session
     Write-Log "Refreshing environment variables..." "Gray"
     $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
@@ -67,7 +67,7 @@ if ($running) {
 # ========= 3. INSTALL DEPENDENCIES =========
 $depsUpdated = $false
 
-# 3.1 Check/Install Git
+# 3.1 Git
 if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
     Write-Log "Git not found. Installing..." "Yellow"
     $gitUrl = (Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest").assets | Where-Object name -match "64-bit.exe" | Select-Object -ExpandProperty browser_download_url -First 1
@@ -77,31 +77,40 @@ if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
     $depsUpdated = $true
 }
 
-# 3.2 Check/Install Node.js (via MSI to get NPM)
+# 3.2 Node.js (via MSI for NPM)
 if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
     Write-Log "Node.js not found. Installing..." "Yellow"
-    # Downloading latest LTS MSI
-    $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" # Можно парсить сайт, но LTS ссылка надежнее
+    $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" 
     $nodeInstaller = "$env:TEMP\node-install.msi"
     Invoke-WebRequest $nodeUrl -OutFile $nodeInstaller
     Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$nodeInstaller`" /quiet /norestart" -Wait
     $depsUpdated = $true
 }
 
-# 3.3 Refresh Path if anything was installed
+# 3.3 Bun (CRITICAL: Required for BD build scripts)
+if (-not (Get-Command "bun" -ErrorAction SilentlyContinue)) {
+    Write-Log "Bun not found. Installing..." "Yellow"
+    try {
+        # Bun installer for Windows
+        powershell -c "irm bun.sh/install.ps1 | iex"
+        $depsUpdated = $true
+    } catch {
+        Write-Log "Failed to install Bun: $_" "Red"
+    }
+}
+
+# 3.4 Refresh Path
 if ($depsUpdated) {
     Refresh-EnvironmentVariables
 }
 
-# 3.4 Install pnpm (using npm is safer/standard for BD)
+# 3.5 pnpm
 if (-not (Get-Command "pnpm" -ErrorAction SilentlyContinue)) {
     Write-Log "Installing pnpm..." "Yellow"
     try {
-        # Sometimes npm is not yet available even after path refresh in rare cases, so we explicitly call the binary if needed, 
-        # but usually Refresh-Env works.
         npm install -g pnpm
     } catch {
-        Write-Log "Error installing pnpm via npm. Attempting standalone script..." "Red"
+        # Fallback if npm path issues
         Invoke-WebRequest "https://get.pnpm.io/install.ps1" -UseBasicParsing | Invoke-Expression
         Refresh-EnvironmentVariables
     }
@@ -116,13 +125,12 @@ if (-not (Test-Path $updateScriptFolder)) { New-Item -ItemType Directory -Path $
 
 try {
     $remoteContent = (Invoke-WebRequest $remoteScriptURL -UseBasicParsing).Content
-    # Check if file exists and differs
     if (-not (Test-Path $localScriptPath) -or (Get-Content $localScriptPath -Raw) -ne $remoteContent) {
         [System.IO.File]::WriteAllText($localScriptPath, $remoteContent)
         Write-Log "Updater script updated to latest version." "Green"
     }
 } catch {
-    Write-Log "Could not check for script updates (Internet issues?)" "Red"
+    Write-Log "Check for updates skipped (Network issue)." "Gray"
 }
 
 # ========= 5. CLONE/UPDATE BETTERDISCORD REPO =========
@@ -141,12 +149,11 @@ if (-not (Test-Path $repoFolder)) {
 # ========= 6. CREATE SHORTCUT =========
 $shortcutPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\BetterDiscord AutoUpdater.lnk"
 if (-not (Test-Path $shortcutPath)) {
-    Write-Log "Creating Start Menu shortcut..." "Gray"
     $wshShell = New-Object -ComObject WScript.Shell
     $shortcut = $wshShell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = "powershell.exe"
     $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
-    $shortcut.IconLocation = "$env:LOCALAPPDATA\Discord\app.ico" # Optional: looks nicer
+    $shortcut.IconLocation = "$env:LOCALAPPDATA\Discord\app.ico"
     $shortcut.Save()
 }
 
@@ -155,35 +162,12 @@ Write-Log "Starting Build & Inject process..." "Magenta"
 Push-Location $repoFolder
 
 try {
-    # Ensure dependencies are installed
+    # 7.1 Install Dependencies
     Write-Log "Installing repo dependencies (pnpm install)..." "Gray"
-    # call pnpm via cmd /c to avoid PowerShell parsing issues with batch files sometimes
-    cmd /c "pnpm install"
+    # Using --config.ignore-scripts to avoid some build script blocks initially
+    $proc = Start-Process -FilePath "cmd" -ArgumentList "/c pnpm install" -Wait -PassThru
+    if ($proc.ExitCode -ne 0) { throw "Dependency installation failed." }
     
+    # 7.2 Build (Uses Bun under the hood)
     Write-Log "Building BetterDiscord (pnpm build)..." "Gray"
-    cmd /c "pnpm build"
-
-    Write-Log "Injecting into Discord (pnpm inject)..." "Gray"
-    # Inject usually asks for target if multiple exist, usually defaults to stable
-    cmd /c "pnpm run inject" 
-
-    Write-Log "BetterDiscord successfully injected!" "Green"
-} catch {
-    Write-Log "An error occurred during build/inject: $_" "Red"
-    Read-Host "Press ENTER to exit..."
-    exit
-} finally {
-    Pop-Location
-}
-
-# ========= 8. LAUNCH DISCORD =========
-$discordUpdater = "$env:LOCALAPPDATA\Discord\Update.exe"
-if (Test-Path $discordUpdater) {
-    Write-Log "Launching Discord..." "Green"
-    Start-Process -FilePath $discordUpdater -ArgumentList "--processStart", "Discord.exe"
-} else {
-    Write-Log "Could not find Discord launcher." "Red"
-}
-
-Write-Log "All done. Exiting in 3 seconds..." "Cyan"
-Start-Sleep -Seconds 3
+    $proc = Start-

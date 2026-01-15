@@ -16,11 +16,6 @@ This script performs the following steps:
     9. Launches Discord.
 #>
 
-<#
-    BetterDiscord Auto-Updater Script (Final Stable)
-    Updated: 2025
-#>
-
 $ErrorActionPreference = "Stop"
 
 # ========= HELPER FUNCTIONS =========
@@ -67,7 +62,7 @@ if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
     $needsRefresh = $true
 }
 
-# Node.js Check (MSI version is required to ensure npm is installed)
+# Node.js Check
 if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
     Write-Log "Node.js not found. Installing..." "Yellow"
     Invoke-WebRequest "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" -OutFile "$env:TEMP\node.msi"
@@ -75,7 +70,7 @@ if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
     $needsRefresh = $true
 }
 
-# Bun Check (Required for BetterDiscord build scripts)
+# Bun Check
 $bunPath = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
 if (-not (Get-Command "bun" -ErrorAction SilentlyContinue) -and -not (Test-Path $bunPath)) {
     Write-Log "Bun not found. Installing..." "Yellow"
@@ -136,20 +131,18 @@ if (-not (Test-Path $shortcutPath)) {
     $shortcut.Save()
 }
 
-# ========= 6. BUILD AND INJECT =========
+# ========= 6. BUILD AND INJECT (NON-INTERACTIVE) =========
 
 Set-Location $repoFolder
 Write-Log "Starting Build & Inject process..." "Magenta"
-
-# Refresh environment variables one last time before final steps
 Refresh-Env
 
 try {
-    # Approve build scripts (prevents pnpm from blocking execution)
-    Write-Log "Approving build scripts..." "Gray"
-    Start-Process cmd -ArgumentList "/c pnpm approve-builds" -Wait -NoNewWindow
+    # Fix for pnpm v10: Automatically allow build scripts to prevent interactive prompt
+    Write-Log "Configuring pnpm to allow build scripts automatically..." "Gray"
+    Start-Process cmd -ArgumentList "/c pnpm config set only-built-dependencies @parcel/watcher,electron,esbuild --location project" -Wait -NoNewWindow
 
-    # Install repository dependencies
+    # Install dependencies
     Write-Log "Step 1: pnpm install" "Gray"
     $p1 = Start-Process cmd -ArgumentList "/c pnpm install" -Wait -NoNewWindow -PassThru
     if ($p1.ExitCode -ne 0) { throw "Error during pnpm install" }
@@ -157,17 +150,18 @@ try {
     # Build
     Write-Log "Step 2: pnpm build" "Gray"
     $p2 = Start-Process cmd -ArgumentList "/c pnpm build" -Wait -NoNewWindow -PassThru
-    if ($p2.ExitCode -ne 0) { throw "Error during build (pnpm build). Ensure Bun is installed correctly." }
+    if ($p2.ExitCode -ne 0) { throw "Error during build (pnpm build)." }
 
     # Inject
     Write-Log "Step 3: pnpm inject" "Gray"
+    # Note: Use 'inject' command directly
     $p3 = Start-Process cmd -ArgumentList "/c pnpm run inject" -Wait -NoNewWindow -PassThru
     if ($p3.ExitCode -ne 0) { throw "Error during injection (pnpm inject)" }
 
     Write-Log "SUCCESS: BetterDiscord successfully installed/updated!" "Green"
 } catch {
     Write-Log "CRITICAL ERROR: $_" "Red"
-    Write-Log "Troubleshooting: Delete the folder '$repoFolder' and run the script again." "Yellow"
+    Write-Host "Please try running the script again. If the issue persists, delete '$repoFolder'." -ForegroundColor Yellow
     Read-Host "Press Enter to exit"
     exit
 }

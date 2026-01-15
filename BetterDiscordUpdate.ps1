@@ -1,8 +1,9 @@
 <#
-    BetterDiscord Auto-Updater Script
-    Updated: 2025-02-20
+BetterDiscord Auto-Updater Script
 
-    This script performs the following steps:
+Updated: 2026-01-15
+
+This script performs the following steps:
     0. Checks if running as administrator and relaunches if not.
     1. Ensures Discord is installed; installs it if missing.
     2. Terminates Discord if running.
@@ -15,97 +16,174 @@
     9. Launches Discord.
 #>
 
+$ErrorActionPreference = "Stop"
+
+# ========= HELPER FUNCTIONS =========
+function Write-Log {
+    param($Message, $Color = "Cyan")
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message" -ForegroundColor $Color
+}
+
+function Refresh-EnvironmentVariables {
+    # Refreshes the PATH variable in the current session without restarting
+    Write-Log "Refreshing environment variables..." "Gray"
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:PATH = "$machinePath;$userPath"
+}
+
 # ========= 0. ELEVATION CHECK =========
-if (-not ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
-    Start-Process powershell "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs; exit
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Log "Requesting Administrator privileges..." "Yellow"
+    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
 }
 
 # ========= 1. CHECK DISCORD INSTALLATION =========
-$discordInstallPath = Join-Path $env:LOCALAPPDATA "Discord"
-if (-not (Test-Path $discordInstallPath)) {
-    Write-Host "Discord is not installed. Downloading and installing..."
+$discordPath = "$env:LOCALAPPDATA\Discord"
+if (-not (Test-Path $discordPath)) {
+    Write-Log "Discord not found. Downloading installer..." "Yellow"
     $discordInstaller = "$env:TEMP\DiscordSetup.exe"
-    Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile $discordInstaller
-    Start-Process -FilePath $discordInstaller -ArgumentList "--silent" -Wait
-    Read-Host -Prompt "Press ENTER to continue once installation is complete"
+    try {
+        Invoke-WebRequest "https://discord.com/api/download?platform=win" -OutFile $discordInstaller
+        Write-Log "Installing Discord..." "Yellow"
+        Start-Process -FilePath $discordInstaller -ArgumentList "--silent" -Wait
+        Write-Log "Discord installed." "Green"
+    } catch {
+        Write-Log "Failed to install Discord: $_" "Red"
+        exit
+    }
 }
 
-# ========= 2. TERMINATE DISCORD =========
-$discordProcess = Get-Process -Name "Discord" -ErrorAction SilentlyContinue
-if ($discordProcess) {
-    Write-Host "Stopping Discord..."
-    Stop-Process -Name "Discord" -Force
+# ========= 2. TERMINATE DISCORD PROCESSES =========
+$procNames = @("Discord", "DiscordCanary", "DiscordPTB")
+$running = Get-Process -Name $procNames -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Log "Closing Discord processes..." "Yellow"
+    Stop-Process -InputObject $running -Force
     Start-Sleep -Seconds 2
 }
 
 # ========= 3. INSTALL DEPENDENCIES =========
-function Install-Dependency {
-    param (
-        [string]$command, [string]$url, [string]$installerArgs = ""
-    )
-    
-    if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        Write-Host "$command not found. Installing..."
-        $installerPath = "$env:TEMP\$($command)-installer"
-        Invoke-WebRequest $url -OutFile $installerPath
-        if ($installerArgs) {
-            Start-Process -FilePath $installerPath -ArgumentList $installerArgs -Wait
-        } else {
-            Invoke-Expression (Get-Content $installerPath -Raw)
-        }
+$depsUpdated = $false
+
+# 3.1 Check/Install Git
+if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
+    Write-Log "Git not found. Installing..." "Yellow"
+    $gitUrl = (Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest").assets | Where-Object name -match "64-bit.exe" | Select-Object -ExpandProperty browser_download_url -First 1
+    $gitInstaller = "$env:TEMP\git-install.exe"
+    Invoke-WebRequest $gitUrl -OutFile $gitInstaller
+    Start-Process -FilePath $gitInstaller -ArgumentList "/VERYSILENT", "/NORESTART" -Wait
+    $depsUpdated = $true
+}
+
+# 3.2 Check/Install Node.js (via MSI to get NPM)
+if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
+    Write-Log "Node.js not found. Installing..." "Yellow"
+    # Downloading latest LTS MSI
+    $nodeUrl = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi" # Можно парсить сайт, но LTS ссылка надежнее
+    $nodeInstaller = "$env:TEMP\node-install.msi"
+    Invoke-WebRequest $nodeUrl -OutFile $nodeInstaller
+    Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$nodeInstaller`" /quiet /norestart" -Wait
+    $depsUpdated = $true
+}
+
+# 3.3 Refresh Path if anything was installed
+if ($depsUpdated) {
+    Refresh-EnvironmentVariables
+}
+
+# 3.4 Install pnpm (using npm is safer/standard for BD)
+if (-not (Get-Command "pnpm" -ErrorAction SilentlyContinue)) {
+    Write-Log "Installing pnpm..." "Yellow"
+    try {
+        # Sometimes npm is not yet available even after path refresh in rare cases, so we explicitly call the binary if needed, 
+        # but usually Refresh-Env works.
+        npm install -g pnpm
+    } catch {
+        Write-Log "Error installing pnpm via npm. Attempting standalone script..." "Red"
+        Invoke-WebRequest "https://get.pnpm.io/install.ps1" -UseBasicParsing | Invoke-Expression
+        Refresh-EnvironmentVariables
     }
 }
 
-Install-Dependency "git" ((Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest").assets | Where-Object name -match "64-bit.exe" | Select-Object -ExpandProperty browser_download_url) "/VERYSILENT"
-Install-Dependency "node" "https://nodejs.org/dist/latest/win-x64/node.exe" "/quiet /norestart"
-Install-Dependency "pnpm" "https://get.pnpm.io/install.ps1"
-Install-Dependency "bun" "https://bun.sh/install.ps1"
-
-# ========= 4. UPDATE SCRIPT =========
-$updateScriptFolder = Join-Path $env:APPDATA "BetterDiscord Update Script"
+# ========= 4. SELF-UPDATE SCRIPT =========
+$updateScriptFolder = "$env:APPDATA\BetterDiscord AutoUpdater"
 $localScriptPath = Join-Path $updateScriptFolder "BetterDiscordUpdate.ps1"
 $remoteScriptURL = "https://raw.githubusercontent.com/MLNekit/BetterDiscordAutoUpdater/main/BetterDiscordUpdate.ps1"
 
 if (-not (Test-Path $updateScriptFolder)) { New-Item -ItemType Directory -Path $updateScriptFolder -Force | Out-Null }
-$remoteContent = (Invoke-WebRequest $remoteScriptURL -UseBasicParsing).Content
-if (-not (Test-Path $localScriptPath) -or (Get-Content $localScriptPath -Raw) -ne $remoteContent) {
-    $remoteContent | Out-File -FilePath $localScriptPath -Encoding utf8
-    Write-Host "Updater script updated."
+
+try {
+    $remoteContent = (Invoke-WebRequest $remoteScriptURL -UseBasicParsing).Content
+    # Check if file exists and differs
+    if (-not (Test-Path $localScriptPath) -or (Get-Content $localScriptPath -Raw) -ne $remoteContent) {
+        [System.IO.File]::WriteAllText($localScriptPath, $remoteContent)
+        Write-Log "Updater script updated to latest version." "Green"
+    }
+} catch {
+    Write-Log "Could not check for script updates (Internet issues?)" "Red"
 }
 
 # ========= 5. CLONE/UPDATE BETTERDISCORD REPO =========
-$repoFolder = Join-Path $updateScriptFolder "BetterDiscord"
+$repoFolder = Join-Path $updateScriptFolder "BetterDiscordRepo"
+
 if (-not (Test-Path $repoFolder)) {
+    Write-Log "Cloning BetterDiscord repository..." "Cyan"
     git clone "https://github.com/BetterDiscord/BetterDiscord.git" $repoFolder
 } else {
+    Write-Log "Pulling latest changes..." "Cyan"
     Push-Location $repoFolder
     git pull
     Pop-Location
 }
 
-# ========= 6. CREATE START MENU SHORTCUT =========
-$shortcut = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\BetterDiscord Update.lnk"
-if (-not (Test-Path $shortcut)) {
-    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
-    $link.TargetPath = "powershell.exe"; $link.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""; $link.Save()
+# ========= 6. CREATE SHORTCUT =========
+$shortcutPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\BetterDiscord AutoUpdater.lnk"
+if (-not (Test-Path $shortcutPath)) {
+    Write-Log "Creating Start Menu shortcut..." "Gray"
+    $wshShell = New-Object -ComObject WScript.Shell
+    $shortcut = $wshShell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = "powershell.exe"
+    $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$localScriptPath`""
+    $shortcut.IconLocation = "$env:LOCALAPPDATA\Discord\app.ico" # Optional: looks nicer
+    $shortcut.Save()
 }
 
-# ========= 7. ENSURE BETTERDISCORD FOLDER EXISTS =========
-$betterDiscordFolder = Join-Path $env:APPDATA "BetterDiscord"
-if (-not (Test-Path $betterDiscordFolder)) { New-Item -ItemType Directory -Path $betterDiscordFolder -Force | Out-Null }
-
-# ========= 8. INSTALL, BUILD, AND INJECT =========
+# ========= 7. BUILD AND INJECT =========
+Write-Log "Starting Build & Inject process..." "Magenta"
 Push-Location $repoFolder
-npm install -g pnpm
-pnpm install
-pnpm build
-pnpm inject
-Pop-Location
 
-# ========= 9. LAUNCH DISCORD =========
-$discordUpdater = Join-Path $env:LOCALAPPDATA "Discord\Update.exe"
-if (Test-Path $discordUpdater) {
-    Start-Process -FilePath $discordUpdater -ArgumentList "--processStart", "Discord.exe"
+try {
+    # Ensure dependencies are installed
+    Write-Log "Installing repo dependencies (pnpm install)..." "Gray"
+    # call pnpm via cmd /c to avoid PowerShell parsing issues with batch files sometimes
+    cmd /c "pnpm install"
+    
+    Write-Log "Building BetterDiscord (pnpm build)..." "Gray"
+    cmd /c "pnpm build"
+
+    Write-Log "Injecting into Discord (pnpm inject)..." "Gray"
+    # Inject usually asks for target if multiple exist, usually defaults to stable
+    cmd /c "pnpm run inject" 
+
+    Write-Log "BetterDiscord successfully injected!" "Green"
+} catch {
+    Write-Log "An error occurred during build/inject: $_" "Red"
+    Read-Host "Press ENTER to exit..."
+    exit
+} finally {
+    Pop-Location
 }
 
-Write-Host "BetterDiscord installation/update completed!"
+# ========= 8. LAUNCH DISCORD =========
+$discordUpdater = "$env:LOCALAPPDATA\Discord\Update.exe"
+if (Test-Path $discordUpdater) {
+    Write-Log "Launching Discord..." "Green"
+    Start-Process -FilePath $discordUpdater -ArgumentList "--processStart", "Discord.exe"
+} else {
+    Write-Log "Could not find Discord launcher." "Red"
+}
+
+Write-Log "All done. Exiting in 3 seconds..." "Cyan"
+Start-Sleep -Seconds 3
